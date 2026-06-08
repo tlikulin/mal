@@ -24,3 +24,6 @@ old
 tmp/
 .xslt_mal_history
 zig-cache/
+
+Cargo.lock
+/**/target/*
