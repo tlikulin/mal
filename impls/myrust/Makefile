@@ -15,6 +15,8 @@ STEPS := $(EXEC_DIR)/step0_repl \
 $(STEPS): $(EXEC_DIR)/%: %.rs
 	cargo build --release --bin $*
 
+$(STEPS): types.rs reader.rs printer.rs
+
 .PHONY: clean
 
 clean:
