@@ -3,15 +3,16 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::types::MalType;
+use super::types::{MalError, MalResult, MalType};
+use MalError::{EmptyInput, ParseError};
 
 pub struct Reader {
     tokens: VecDeque<String>,
 }
 
 impl Reader {
-    fn new(tokens: VecDeque<String>) -> Self {
-        Reader { tokens }
+    const fn new(tokens: VecDeque<String>) -> Self {
+        Self { tokens }
     }
 
     fn is_empty(&self) -> bool {
@@ -27,36 +28,41 @@ impl Reader {
     }
 }
 
-pub fn read_str(input: String) -> Result<MalType, String> {
+pub fn read_str(input: &str) -> MalResult {
     let tokens = tokenize(input);
     let mut reader = Reader::new(tokens);
-    read_form(&mut reader)
+    if reader.is_empty() {
+        Err(EmptyInput)
+    } else {
+        read_form(&mut reader)
+    }
 }
 
 static TOKEN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"[\s,]*(~@|[\[\]{}()'`~^@]|"(?:\\.|[^\\"])*"?|;.*|[^\s\[\]{}('"`,;)]*)"#).unwrap()
 });
 
-fn tokenize(input: String) -> VecDeque<String> {
+fn tokenize(input: &str) -> VecDeque<String> {
     TOKEN_REGEX
-        .captures_iter(&input)
+        .captures_iter(input)
         .map(|mat| String::from(&mat[1]))
         .filter(|t| !t.starts_with(';'))
         .take_while(|s| !s.is_empty())
         .collect()
 }
 
-fn read_form(reader: &mut Reader) -> Result<MalType, String> {
+fn read_form(reader: &mut Reader) -> MalResult {
     match reader.peek() {
         Some(t) if t == "(" => Ok(MalType::List(read_list(reader, ("(", ")"))?)),
         Some(t) if t == "[" => Ok(MalType::Vector(read_list(reader, ("[", "]"))?)),
         Some(t) if t == "{" => read_map(read_list(reader, ("{", "}"))?),
+        Some(t) if is_macro(t) => read_macro(reader),
         Some(_) => read_atom(reader),
-        None => Ok(MalType::Nil),
+        None => Err(ParseError("underflow".to_string())),
     }
 }
 
-fn read_list(reader: &mut Reader, delims: (&str, &str)) -> Result<Vec<MalType>, String> {
+fn read_list(reader: &mut Reader, delims: (&str, &str)) -> Result<Vec<MalType>, MalError> {
     let mut list = Vec::new();
     assert_eq!(reader.next(), delims.0);
 
@@ -66,33 +72,32 @@ fn read_list(reader: &mut Reader, delims: (&str, &str)) -> Result<Vec<MalType>, 
         {
             assert_eq!(reader.next(), delims.1);
             return Ok(list);
-        } else {
-            list.push(read_form(reader)?);
         }
+
+        list.push(read_form(reader)?);
     }
 
-    Err(format!("unbalanced '{}'", delims.0))
+    Err(ParseError(format!("unbalanced '{}'", delims.0)))
 }
 
-fn read_atom(reader: &mut Reader) -> Result<MalType, String> {
+fn read_atom(reader: &mut Reader) -> MalResult {
     let token = reader.next();
 
-    if let Ok(num) = token.parse() {
-        Ok(MalType::Number(num))
-    } else {
-        match token.as_str() {
+    token.parse().map_or_else(
+        |_| match token.as_str() {
             "nil" => Ok(MalType::Nil),
             "true" => Ok(MalType::Bool(true)),
             "false" => Ok(MalType::Bool(false)),
-            t if t.starts_with('"') => read_atom_string(token),
+            t if t.starts_with('"') => read_atom_string(&token),
             t if t.starts_with(':') => Ok(MalType::Keyword(token)),
-            ")" | "]" | "}" => Err(format!("unbalanced '{}'", token)),
+            ")" | "]" | "}" => Err(ParseError(format!("unbalanced '{token}'"))),
             _ => Ok(MalType::Symbol(token)),
-        }
-    }
+        },
+        |num| Ok(MalType::Number(num)),
+    )
 }
 
-fn read_atom_string(token: String) -> Result<MalType, String> {
+fn read_atom_string(token: &str) -> MalResult {
     assert!(token.starts_with('"'));
     if token.len() >= 2 && token.ends_with('"') {
         let mut string = String::new();
@@ -108,25 +113,27 @@ fn read_atom_string(token: String) -> Result<MalType, String> {
                     string.push('\n');
                     escaped = false;
                 }
-                _ if escaped => return Err(format!("can't escape '{c}' in string")),
+                _ if escaped => {
+                    return Err(ParseError(format!("can't escape '{c}' in string")));
+                }
                 '\\' => escaped = true,
                 _ => string.push(c),
             }
         }
 
         if escaped {
-            Err("invalid string literal".into())
+            Err(ParseError("invalid string literal".into()))
         } else {
             Ok(MalType::String(string))
         }
     } else {
-        Err("unbalanced '\"'".into())
+        Err(ParseError("unbalanced '\"'".into()))
     }
 }
 
-fn read_map(mut list: Vec<MalType>) -> Result<MalType, String> {
+fn read_map(mut list: Vec<MalType>) -> MalResult {
     if list.len() % 2 == 1 {
-        Err("hash-map can't have odd number of items".into())
+        Err(ParseError("hash-map can't have odd number of items".into()))
     } else {
         let mut map = HashMap::new();
 
@@ -136,12 +143,43 @@ fn read_map(mut list: Vec<MalType>) -> Result<MalType, String> {
             let key = match raw_key {
                 MalType::String(string) => string,
                 MalType::Keyword(keyword) => keyword,
-                _ => return Err("hash-map key not hashable".into()),
+                _ => return Err(ParseError("hash-map key not hashable".into())),
             };
 
             map.insert(key, value);
         }
 
         Ok(MalType::HashMap(map))
+    }
+}
+
+fn is_macro(token: &str) -> bool {
+    ["'", "`", "~", "~@", "@", "^"].contains(&token)
+}
+
+fn read_macro(reader: &mut Reader) -> MalResult {
+    let macro_symbol = match reader.next().as_str() {
+        "'" => String::from("quote"),
+        "`" => String::from("quasiquote"),
+        "~" => String::from("unquote"),
+        "~@" => String::from("splice-unquote"),
+        "@" => String::from("deref"),
+        "^" => String::from("with-meta"),
+        t => unreachable!("{t} is not a valid quote kind"),
+    };
+
+    if macro_symbol == "with-meta" {
+        let target1 = read_form(reader)?;
+        let target2 = read_form(reader)?;
+
+        Ok(MalType::List(vec![
+            MalType::Symbol(macro_symbol),
+            target2,
+            target1,
+        ]))
+    } else {
+        let target = read_form(reader)?;
+
+        Ok(MalType::List(vec![MalType::Symbol(macro_symbol), target]))
     }
 }

@@ -9,15 +9,15 @@ pub fn pr_str(mal: MalType) -> String {
         MalType::List(list) => print_list_readably(list, ("(", ")")),
         MalType::Nil => "nil".to_owned(),
         MalType::Bool(bool) => bool.to_string(),
-        MalType::String(string) => print_string_readably(string),
+        MalType::String(string) => print_string_readably(&string),
         MalType::Keyword(key) => key,
         MalType::Vector(vec) => print_list_readably(vec, ("[", "]")),
         MalType::HashMap(map) => print_map_readably(map),
     }
 }
 
-/// For printing MalType::String
-fn print_string_readably(string: String) -> String {
+/// For printing `MalType::String`
+fn print_string_readably(string: &str) -> String {
     let mut output = String::from('"');
 
     for c in string.chars() {
@@ -33,7 +33,7 @@ fn print_string_readably(string: String) -> String {
     output
 }
 
-/// For printing MalType::{List, Vec}
+/// For printing `MalType::{List, Vec}`
 fn print_list_readably(list: Vec<MalType>, delims: (&str, &str)) -> String {
     format!(
         "{}{}{}",
@@ -46,7 +46,7 @@ fn print_list_readably(list: Vec<MalType>, delims: (&str, &str)) -> String {
     )
 }
 
-/// For printing MalType::HashMap
+/// For printing `MalType::HashMap`
 fn print_map_readably(map: HashMap<String, MalType>) -> String {
     let inner = map
         .into_iter()
@@ -56,7 +56,7 @@ fn print_map_readably(map: HashMap<String, MalType>) -> String {
                 if k.starts_with(':') {
                     k
                 } else {
-                    print_string_readably(k)
+                    print_string_readably(&k)
                 },
                 pr_str(v)
             )

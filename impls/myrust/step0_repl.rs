@@ -10,25 +10,24 @@ fn main() -> io::Result<()> {
 
         if input.is_empty() {
             return Ok(());
-        } else {
-            let output = rep(input);
-            print!("{output}");
         }
+        let output = rep(input);
+        print!("{output}");
     }
 }
 
-fn read(input: String) -> String {
+const fn read(input: String) -> String {
     input
 }
 
-fn eval(input: String) -> String {
+const fn eval(input: String) -> String {
     input
 }
 
-fn print(input: String) -> String {
+const fn print(input: String) -> String {
     input
 }
 
-fn rep(input: String) -> String {
+const fn rep(input: String) -> String {
     print(eval(read(input)))
 }
