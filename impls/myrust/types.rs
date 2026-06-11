@@ -2,11 +2,12 @@ use std::{collections::HashMap, fmt::Debug, rc::Rc};
 
 pub type Callable = Rc<dyn Fn(Vec<MalType>) -> MalResult>;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum MalType {
     Number(i32),
     Symbol(String),
     List(Vec<Self>),
+    #[default]
     Nil,
     Bool(bool),
     String(String),
@@ -14,6 +15,22 @@ pub enum MalType {
     Vector(Vec<Self>),
     HashMap(HashMap<String, Self>),
     BuiltinFunc(Callable),
+}
+
+impl MalType {
+    pub fn into_callable(self) -> Option<Callable> {
+        match self {
+            Self::BuiltinFunc(func) => Some(func),
+            _ => None,
+        }
+    }
+
+    pub fn into_number(self) -> Option<i32> {
+        match self {
+            Self::Number(num) => Some(num),
+            _ => None,
+        }
+    }
 }
 
 impl Debug for MalType {
@@ -29,22 +46,6 @@ impl Debug for MalType {
             Self::Vector(arg0) => f.debug_tuple("Vector").field(arg0).finish(),
             Self::HashMap(arg0) => f.debug_tuple("HashMap").field(arg0).finish(),
             Self::BuiltinFunc(_) => f.debug_tuple("BuiltinFunc").field(&"<function>").finish(),
-        }
-    }
-}
-
-impl MalType {
-    pub fn into_callable(self) -> Option<Callable> {
-        match self {
-            Self::BuiltinFunc(func) => Some(func),
-            _ => None,
-        }
-    }
-
-    pub fn into_number(self) -> Option<i32> {
-        match self {
-            Self::Number(num) => Some(num),
-            _ => None,
         }
     }
 }

@@ -131,28 +131,28 @@ fn read_atom_string(token: &str) -> MalResult {
     }
 }
 
-fn read_map(mut list: Vec<MalType>) -> MalResult {
+fn read_map(list: Vec<MalType>) -> MalResult {
     if list.len() % 2 == 1 {
-        Err(ParseError(
+        return Err(ParseError(
             "hash-map can't have odd number of items".to_string(),
-        ))
-    } else {
-        let mut map = HashMap::new();
-
-        while !list.is_empty() {
-            let (value, raw_key) = (list.pop().unwrap(), list.pop().unwrap());
-
-            let key = match raw_key {
-                MalType::String(string) => string,
-                MalType::Keyword(keyword) => keyword,
-                _ => return Err(ParseError("hash-map key not hashable".to_string())),
-            };
-
-            map.insert(key, value);
-        }
-
-        Ok(MalType::HashMap(map))
+        ));
     }
+
+    let mut map = HashMap::new();
+
+    let mut it = list.into_iter();
+
+    while let (Some(raw_key), Some(value)) = (it.next(), it.next()) {
+        let key = match raw_key {
+            MalType::String(string) => string,
+            MalType::Keyword(keyword) => keyword,
+            _ => return Err(ParseError("hash-map key not hashable".to_string())),
+        };
+
+        map.insert(key, value);
+    }
+
+    Ok(MalType::HashMap(map))
 }
 
 fn is_macro(token: &str) -> bool {
