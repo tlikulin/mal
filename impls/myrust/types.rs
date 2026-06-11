@@ -1,6 +1,8 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug, rc::Rc};
 
-#[derive(Debug)]
+pub type Callable = Rc<dyn Fn(Vec<MalType>) -> MalResult>;
+
+#[derive(Clone)]
 pub enum MalType {
     Number(i32),
     Symbol(String),
@@ -11,11 +13,46 @@ pub enum MalType {
     Keyword(String),
     Vector(Vec<Self>),
     HashMap(HashMap<String, Self>),
+    BuiltinFunc(Callable),
+}
+
+impl Debug for MalType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Number(arg0) => f.debug_tuple("Number").field(arg0).finish(),
+            Self::Symbol(arg0) => f.debug_tuple("Symbol").field(arg0).finish(),
+            Self::List(arg0) => f.debug_tuple("List").field(arg0).finish(),
+            Self::Nil => write!(f, "Nil"),
+            Self::Bool(arg0) => f.debug_tuple("Bool").field(arg0).finish(),
+            Self::String(arg0) => f.debug_tuple("String").field(arg0).finish(),
+            Self::Keyword(arg0) => f.debug_tuple("Keyword").field(arg0).finish(),
+            Self::Vector(arg0) => f.debug_tuple("Vector").field(arg0).finish(),
+            Self::HashMap(arg0) => f.debug_tuple("HashMap").field(arg0).finish(),
+            Self::BuiltinFunc(_) => f.debug_tuple("BuiltinFunc").field(&"<function>").finish(),
+        }
+    }
+}
+
+impl MalType {
+    pub fn into_callable(self) -> Option<Callable> {
+        match self {
+            Self::BuiltinFunc(func) => Some(func),
+            _ => None,
+        }
+    }
+
+    pub fn into_number(self) -> Option<i32> {
+        match self {
+            Self::Number(num) => Some(num),
+            _ => None,
+        }
+    }
 }
 
 pub enum MalError {
     EmptyInput,
     ParseError(String),
+    EvalError(String),
 }
 
 pub type MalResult = Result<MalType, MalError>;

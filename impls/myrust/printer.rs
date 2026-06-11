@@ -10,9 +10,13 @@ pub fn pr_str(mal: MalType) -> String {
         MalType::Nil => "nil".to_owned(),
         MalType::Bool(bool) => bool.to_string(),
         MalType::String(string) => print_string_readably(&string),
-        MalType::Keyword(key) => key,
+        MalType::Keyword(mut key) => {
+            assert_eq!(key.pop(), Some('\u{29E}'));
+            key
+        }
         MalType::Vector(vec) => print_list_readably(vec, ("[", "]")),
         MalType::HashMap(map) => print_map_readably(map),
+        MalType::BuiltinFunc(_) => "<builtin>".to_string(),
     }
 }
 
@@ -50,10 +54,11 @@ fn print_list_readably(list: Vec<MalType>, delims: (&str, &str)) -> String {
 fn print_map_readably(map: HashMap<String, MalType>) -> String {
     let inner = map
         .into_iter()
-        .map(|(k, v)| {
+        .map(|(mut k, v)| {
             format!(
                 "{} {}",
-                if k.starts_with(':') {
+                if k.ends_with('\u{29E}') {
+                    k.pop();
                     k
                 } else {
                     print_string_readably(&k)

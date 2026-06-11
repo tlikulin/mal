@@ -89,7 +89,7 @@ fn read_atom(reader: &mut Reader) -> MalResult {
             "true" => Ok(MalType::Bool(true)),
             "false" => Ok(MalType::Bool(false)),
             t if t.starts_with('"') => read_atom_string(&token),
-            t if t.starts_with(':') => Ok(MalType::Keyword(token)),
+            t if t.starts_with(':') => Ok(MalType::Keyword(token + "\u{29E}")),
             ")" | "]" | "}" => Err(ParseError(format!("unbalanced '{token}'"))),
             _ => Ok(MalType::Symbol(token)),
         },
@@ -122,18 +122,20 @@ fn read_atom_string(token: &str) -> MalResult {
         }
 
         if escaped {
-            Err(ParseError("invalid string literal".into()))
+            Err(ParseError("invalid string literal".to_string()))
         } else {
             Ok(MalType::String(string))
         }
     } else {
-        Err(ParseError("unbalanced '\"'".into()))
+        Err(ParseError("unbalanced '\"'".to_string()))
     }
 }
 
 fn read_map(mut list: Vec<MalType>) -> MalResult {
     if list.len() % 2 == 1 {
-        Err(ParseError("hash-map can't have odd number of items".into()))
+        Err(ParseError(
+            "hash-map can't have odd number of items".to_string(),
+        ))
     } else {
         let mut map = HashMap::new();
 
@@ -143,7 +145,7 @@ fn read_map(mut list: Vec<MalType>) -> MalResult {
             let key = match raw_key {
                 MalType::String(string) => string,
                 MalType::Keyword(keyword) => keyword,
-                _ => return Err(ParseError("hash-map key not hashable".into())),
+                _ => return Err(ParseError("hash-map key not hashable".to_string())),
             };
 
             map.insert(key, value);

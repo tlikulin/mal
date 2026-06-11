@@ -45,5 +45,6 @@ fn rep(input: &str) -> Option<String> {
         Ok(mal) => Some(PRINT(EVAL(mal))),
         Err(MalError::EmptyInput) => None,
         Err(MalError::ParseError(msg)) => Some(format!("mal: parse error: {msg}")),
+        _ => unimplemented!(),
     }
 }
