@@ -21,7 +21,7 @@ fn main() -> io::Result<()> {
     let mut repl_env = Env::new(None);
 
     for (op, func) in builtin_functions {
-        repl_env.set(op.to_string(), MalType::BuiltinFunc(func));
+        repl_env.set(op.to_string(), MalType::Function(func));
     }
 
     loop {
@@ -48,7 +48,7 @@ fn READ(input: &str) -> MalResult {
 #[allow(non_snake_case)]
 fn EVAL(mal: MalType, env: &mut Env) -> MalResult {
     if is_debug_eval_set(env) {
-        println!("EVAL: {}", printer::pr_str(mal.clone()));
+        println!("EVAL: {}", printer::pr_str(mal.clone(), true));
     }
 
     match mal {
@@ -75,8 +75,8 @@ fn EVAL(mal: MalType, env: &mut Env) -> MalResult {
                 };
 
                 let value = EVAL(it.next().unwrap(), env)?;
-
-                Ok(env.set(key, value))
+                env.set(key.clone(), value);
+                env.get(&key)
             }
 
             Some(MalType::Symbol(sym)) if sym == "let*" => {
@@ -167,7 +167,7 @@ fn is_debug_eval_set(env: &Env) -> bool {
 #[allow(non_snake_case)]
 fn PRINT(mal: MalResult) -> Option<String> {
     match mal {
-        Ok(mal) => Some(printer::pr_str(mal)),
+        Ok(mal) => Some(printer::pr_str(mal, true)),
         Err(MalError::EmptyInput) => None,
         Err(MalError::ParseError(msg)) => Some(format!("mal: parse error: {msg}")),
         Err(MalError::EvalError(msg)) => Some(format!("mal: eval error: {msg}")),

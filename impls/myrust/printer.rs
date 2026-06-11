@@ -2,21 +2,27 @@ use std::collections::HashMap;
 
 use super::types::MalType;
 
-pub fn pr_str(mal: MalType) -> String {
+pub fn pr_str(mal: MalType, readably: bool) -> String {
     match mal {
         MalType::Number(num) => num.to_string(),
         MalType::Symbol(sym) => sym,
-        MalType::List(list) => print_list_readably(list, ("(", ")")),
+        MalType::List(list) => print_list(list, ("(", ")"), readably),
         MalType::Nil => "nil".to_owned(),
         MalType::Bool(bool) => bool.to_string(),
-        MalType::String(string) => print_string_readably(&string),
+        MalType::String(string) => {
+            if readably {
+                print_string_readably(&string)
+            } else {
+                string
+            }
+        }
         MalType::Keyword(mut key) => {
             assert_eq!(key.pop(), Some('\u{29E}'));
             key
         }
-        MalType::Vector(vec) => print_list_readably(vec, ("[", "]")),
-        MalType::HashMap(map) => print_map_readably(map),
-        MalType::BuiltinFunc(_) => "<builtin>".to_string(),
+        MalType::Vector(vec) => print_list(vec, ("[", "]"), readably),
+        MalType::HashMap(map) => print_map(map, readably),
+        MalType::Function(_) => "#<function>".to_string(),
     }
 }
 
@@ -38,12 +44,12 @@ fn print_string_readably(string: &str) -> String {
 }
 
 /// For printing `MalType::{List, Vec}`
-fn print_list_readably(list: Vec<MalType>, delims: (&str, &str)) -> String {
+fn print_list(list: Vec<MalType>, delims: (&str, &str), readably: bool) -> String {
     format!(
         "{}{}{}",
         delims.0,
         list.into_iter()
-            .map(pr_str)
+            .map(|el| pr_str(el, readably))
             .collect::<Vec<String>>()
             .join(" "),
         delims.1
@@ -51,7 +57,7 @@ fn print_list_readably(list: Vec<MalType>, delims: (&str, &str)) -> String {
 }
 
 /// For printing `MalType::HashMap`
-fn print_map_readably(map: HashMap<String, MalType>) -> String {
+fn print_map(map: HashMap<String, MalType>, readably: bool) -> String {
     let inner = map
         .into_iter()
         .map(|(mut k, v)| {
@@ -63,7 +69,7 @@ fn print_map_readably(map: HashMap<String, MalType>) -> String {
                 } else {
                     print_string_readably(&k)
                 },
-                pr_str(v)
+                pr_str(v, readably)
             )
         })
         .collect::<Vec<String>>()

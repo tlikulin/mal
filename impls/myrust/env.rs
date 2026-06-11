@@ -12,10 +12,8 @@ impl Env {
         }))
     }
 
-    pub fn set(&mut self, key: String, value: MalType) -> MalType {
-        let cloned = value.clone();
+    pub fn set(&mut self, key: String, value: MalType) {
         Rc::get_mut(&mut self.0).unwrap().data.insert(key, value);
-        cloned
     }
 
     pub fn get(&self, key: &str) -> MalResult {

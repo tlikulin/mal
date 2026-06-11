@@ -14,13 +14,13 @@ pub enum MalType {
     Keyword(String),
     Vector(Vec<Self>),
     HashMap(HashMap<String, Self>),
-    BuiltinFunc(Callable),
+    Function(Callable),
 }
 
 impl MalType {
     pub fn into_callable(self) -> Option<Callable> {
         match self {
-            Self::BuiltinFunc(func) => Some(func),
+            Self::Function(func) => Some(func),
             _ => None,
         }
     }
@@ -45,7 +45,7 @@ impl Debug for MalType {
             Self::Keyword(arg0) => f.debug_tuple("Keyword").field(arg0).finish(),
             Self::Vector(arg0) => f.debug_tuple("Vector").field(arg0).finish(),
             Self::HashMap(arg0) => f.debug_tuple("HashMap").field(arg0).finish(),
-            Self::BuiltinFunc(_) => f.debug_tuple("BuiltinFunc").field(&"<function>").finish(),
+            Self::Function(_) => f.debug_tuple("BuiltinFunc").field(&"<function>").finish(),
         }
     }
 }
