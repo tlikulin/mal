@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Debug, rc::Rc};
 
-pub type Callable = Rc<dyn Fn(Vec<MalType>) -> MalResult>;
+use crate::{env::Env, eval};
 
 #[derive(Clone, Default)]
 pub enum MalType {
@@ -14,42 +14,54 @@ pub enum MalType {
     Keyword(String),
     Vector(Vec<Self>),
     HashMap(HashMap<String, Self>),
-    Function(Callable),
+    BuiltinFunc(Rc<dyn Fn(Vec<Self>) -> MalResult>),
+    Lambda {
+        binds: Vec<Self>,
+        body: Box<Self>,
+        env: Env,
+    },
 }
 
 impl MalType {
-    pub fn into_callable(self) -> Option<Callable> {
+    pub fn call(self, args: Vec<Self>) -> MalResult {
         match self {
-            Self::Function(func) => Some(func),
-            _ => None,
+            Self::BuiltinFunc(func) => func(args),
+            Self::Lambda { binds, body, env } => {
+                let fn_env = Env::new(Some(env), binds, args)?;
+                eval(*body, &fn_env)
+            }
+            _ => Err(MalError::EvalError("not callable".to_string())),
         }
     }
 
-    pub fn into_number(self) -> Option<i32> {
-        match self {
-            Self::Number(num) => Some(num),
-            _ => None,
+    pub const fn to_bool(&self) -> bool {
+        !matches!(&self, Self::Nil | Self::Bool(false))
+    }
+}
+
+impl PartialEq for MalType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Number(l0), Self::Number(r0)) => l0 == r0,
+            (Self::Symbol(l0), Self::Symbol(r0))
+            | (Self::String(l0), Self::String(r0))
+            | (Self::Keyword(l0), Self::Keyword(r0)) => l0 == r0,
+            (Self::List(l0) | Self::Vector(l0), Self::List(r0) | Self::Vector(r0)) => l0 == r0,
+            (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
+            (Self::HashMap(l0), Self::HashMap(r0)) => l0 == r0,
+            (Self::Nil, Self::Nil) => true,
+            _ => false,
         }
     }
 }
 
 impl Debug for MalType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Number(arg0) => f.debug_tuple("Number").field(arg0).finish(),
-            Self::Symbol(arg0) => f.debug_tuple("Symbol").field(arg0).finish(),
-            Self::List(arg0) => f.debug_tuple("List").field(arg0).finish(),
-            Self::Nil => write!(f, "Nil"),
-            Self::Bool(arg0) => f.debug_tuple("Bool").field(arg0).finish(),
-            Self::String(arg0) => f.debug_tuple("String").field(arg0).finish(),
-            Self::Keyword(arg0) => f.debug_tuple("Keyword").field(arg0).finish(),
-            Self::Vector(arg0) => f.debug_tuple("Vector").field(arg0).finish(),
-            Self::HashMap(arg0) => f.debug_tuple("HashMap").field(arg0).finish(),
-            Self::Function(_) => f.debug_tuple("BuiltinFunc").field(&"<function>").finish(),
-        }
+        write!(f, "{{mal}}")
     }
 }
 
+#[derive(Debug)]
 pub enum MalError {
     EmptyInput,
     ParseError(String),

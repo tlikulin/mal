@@ -22,7 +22,8 @@ pub fn pr_str(mal: MalType, readably: bool) -> String {
         }
         MalType::Vector(vec) => print_list(vec, ("[", "]"), readably),
         MalType::HashMap(map) => print_map(map, readably),
-        MalType::Function(_) => "#<function>".to_string(),
+        MalType::BuiltinFunc(_) => "#<builtin-function>".to_string(),
+        MalType::Lambda { .. } => "#<function>".to_string(),
     }
 }
 
