@@ -1,10 +1,10 @@
 use std::{collections::HashMap, fmt::Debug, rc::Rc};
 
-use crate::{env::Env, eval};
+use crate::env::Env;
 
 #[derive(Clone, Default)]
 pub enum MalType {
-    Number(i32),
+    Number(i64),
     Symbol(String),
     List(Vec<Self>),
     #[default]
@@ -16,24 +16,13 @@ pub enum MalType {
     HashMap(HashMap<String, Self>),
     BuiltinFunc(Rc<dyn Fn(Vec<Self>) -> MalResult>),
     Lambda {
-        binds: Vec<Self>,
+        params: Vec<Self>,
         body: Box<Self>,
-        env: Env,
+        l_env: Env,
     },
 }
 
 impl MalType {
-    pub fn call(self, args: Vec<Self>) -> MalResult {
-        match self {
-            Self::BuiltinFunc(func) => func(args),
-            Self::Lambda { binds, body, env } => {
-                let fn_env = Env::new(Some(env), binds, args)?;
-                eval(*body, &fn_env)
-            }
-            _ => Err(MalError::EvalError("not callable".to_string())),
-        }
-    }
-
     pub const fn to_bool(&self) -> bool {
         !matches!(&self, Self::Nil | Self::Bool(false))
     }

@@ -150,13 +150,13 @@ fn eval_let(list: Vec<MalType>, env: &Env) -> MalResult {
 }
 
 fn eval_do(list: Vec<MalType>, env: &Env) -> MalResult {
-    let mut it = list
+    let mut evaled = list
         .into_iter()
         .skip(1)
         .map(|m| eval(m, env))
         .collect::<Result<Vec<_>, _>>()?;
 
-    it.pop().map_or_else(
+    evaled.pop().map_or_else(
         || Err(MalError::EvalError("'do' expects some args".to_string())),
         Ok,
     )
