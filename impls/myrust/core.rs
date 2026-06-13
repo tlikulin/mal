@@ -1,12 +1,19 @@
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::unnecessary_wraps,
+    reason = "must conform to same signature"
+)]
+use std::cell::RefCell;
+use std::fs;
 use std::rc::Rc;
 
-use crate::{
-    printer,
-    types::{MalError, MalResult, MalType},
-};
+use crate::env::Env;
+use crate::types::{MalError, MalResult, MalType};
+use crate::{printer, reader};
 
 pub fn ns() -> Vec<(&'static str, MalType)> {
     vec![
+        ("*ARGV*", MalType::List(vec![])),
         ("+", builtin_fn(add)),
         ("-", builtin_fn(sub)),
         ("*", builtin_fn(mult)),
@@ -24,6 +31,13 @@ pub fn ns() -> Vec<(&'static str, MalType)> {
         ("pr-str", builtin_fn(prstr)),
         ("str", builtin_fn(str)),
         ("println", builtin_fn(println)),
+        ("read-string", builtin_fn(read_string)),
+        ("slurp", builtin_fn(slurp)),
+        ("atom", builtin_fn(atom)),
+        ("atom?", builtin_fn(is_atom)),
+        ("deref", builtin_fn(deref)),
+        ("reset!", builtin_fn(reset)),
+        ("swap!", builtin_fn(swap)),
     ]
 }
 
@@ -82,7 +96,6 @@ fn div(mut args: Vec<MalType>) -> MalResult {
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
 fn prn(args: Vec<MalType>) -> MalResult {
     let Ok(MalType::String(s)) = prstr(args) else {
         unreachable!("prstr() should not fail")
@@ -91,12 +104,10 @@ fn prn(args: Vec<MalType>) -> MalResult {
     Ok(MalType::Nil)
 }
 
-#[allow(clippy::unnecessary_wraps)]
 const fn list(args: Vec<MalType>) -> MalResult {
     Ok(MalType::List(args))
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn is_list(args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
         Err(MalError::EvalError("too few args to 'list?'".to_string()))
@@ -105,7 +116,6 @@ fn is_list(args: Vec<MalType>) -> MalResult {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn is_empty(args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
         Err(MalError::EvalError("too few args to 'empty?'".to_string()))
@@ -118,7 +128,6 @@ fn is_empty(args: Vec<MalType>) -> MalResult {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn count(args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
         Err(MalError::EvalError("too few args to 'count'".to_string()))
@@ -133,7 +142,6 @@ fn count(args: Vec<MalType>) -> MalResult {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn eq(args: Vec<MalType>) -> MalResult {
     if args.len() < 2 {
         Err(MalError::EvalError("too few args to '='".to_string()))
@@ -142,7 +150,6 @@ fn eq(args: Vec<MalType>) -> MalResult {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn lt(args: Vec<MalType>) -> MalResult {
     if args.len() < 2 {
         Err(MalError::EvalError("too few args to '<'".to_string()))
@@ -153,7 +160,6 @@ fn lt(args: Vec<MalType>) -> MalResult {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn le(args: Vec<MalType>) -> MalResult {
     if args.len() < 2 {
         Err(MalError::EvalError("too few args to '<='".to_string()))
@@ -164,7 +170,6 @@ fn le(args: Vec<MalType>) -> MalResult {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn gt(args: Vec<MalType>) -> MalResult {
     if args.len() < 2 {
         Err(MalError::EvalError("too few args to '>'".to_string()))
@@ -175,7 +180,6 @@ fn gt(args: Vec<MalType>) -> MalResult {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn ge(args: Vec<MalType>) -> MalResult {
     if args.len() < 2 {
         Err(MalError::EvalError("too few args to '>='".to_string()))
@@ -186,7 +190,6 @@ fn ge(args: Vec<MalType>) -> MalResult {
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
 fn prstr(args: Vec<MalType>) -> MalResult {
     Ok(MalType::String(
         args.into_iter()
@@ -196,7 +199,6 @@ fn prstr(args: Vec<MalType>) -> MalResult {
     ))
 }
 
-#[allow(clippy::unnecessary_wraps)]
 fn str(args: Vec<MalType>) -> MalResult {
     Ok(MalType::String(
         args.into_iter()
@@ -205,7 +207,6 @@ fn str(args: Vec<MalType>) -> MalResult {
     ))
 }
 
-#[allow(clippy::unnecessary_wraps)]
 fn println(args: Vec<MalType>) -> MalResult {
     println!(
         "{}",
@@ -215,4 +216,77 @@ fn println(args: Vec<MalType>) -> MalResult {
             .join(" ")
     );
     Ok(MalType::Nil)
+}
+
+fn read_string(args: Vec<MalType>) -> MalResult {
+    match args.first() {
+        Some(MalType::String(string)) => reader::read_str(string),
+        Some(_) => Err(MalError::EvalError(
+            "'read_string' expects string".to_string(),
+        )),
+        None => Err(MalError::EmptyInput),
+    }
+}
+
+fn slurp(args: Vec<MalType>) -> MalResult {
+    if let Some(MalType::String(filename)) = args.first() {
+        let contents = fs::read_to_string(filename)?;
+        Ok(MalType::String(contents))
+    } else {
+        Err(MalError::EvalError("'slurp' expects string".to_string()))
+    }
+}
+
+fn atom(mut args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        Err(MalError::EvalError("'atom' expects an arg".to_string()))
+    } else {
+        Ok(MalType::Atom(Rc::new(RefCell::new(args.swap_remove(0)))))
+    }
+}
+
+fn is_atom(args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        Err(MalError::EvalError("'atom?' expects an arg".to_string()))
+    } else {
+        Ok(MalType::Bool(matches!(args[0], MalType::Atom(_))))
+    }
+}
+
+fn deref(args: Vec<MalType>) -> MalResult {
+    if let Some(MalType::Atom(inner)) = args.first() {
+        Ok(inner.borrow().clone())
+    } else {
+        Err(MalError::EvalError("'deref' expects an atom".to_string()))
+    }
+}
+
+fn reset(args: Vec<MalType>) -> MalResult {
+    let mut it = args.into_iter();
+    if let (Some(MalType::Atom(inner)), Some(mal)) = (it.next(), it.next()) {
+        inner.replace(mal);
+        Ok(inner.borrow().clone())
+    } else {
+        Err(MalError::EvalError(
+            "'reset!' expects an atom and a value".to_string(),
+        ))
+    }
+}
+
+fn swap(args: Vec<MalType>) -> MalResult {
+    let mut it = args.into_iter();
+    if let (Some(MalType::Atom(inner)), Some(func)) = (it.next(), it.next()) {
+        let mut ast = vec![func, inner.borrow().clone()];
+        ast.extend(it);
+
+        let fake_env = Env::new(None, vec![], vec![]).unwrap();
+        let new_value = crate::eval(MalType::List(ast), &fake_env)?;
+
+        inner.replace(new_value);
+        Ok(inner.borrow().clone())
+    } else {
+        Err(MalError::EvalError(
+            "'swap!' expects an atom, a func (and args)".to_string(),
+        ))
+    }
 }

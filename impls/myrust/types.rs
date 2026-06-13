@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt::Debug, io, rc::Rc};
 
 use crate::env::Env;
 
@@ -18,8 +18,9 @@ pub enum MalType {
     Lambda {
         params: Vec<Self>,
         body: Box<Self>,
-        l_env: Env,
+        capt_env: Env,
     },
+    Atom(Rc<RefCell<Self>>),
 }
 
 impl MalType {
@@ -55,6 +56,13 @@ pub enum MalError {
     EmptyInput,
     ParseError(String),
     EvalError(String),
+    IOError(io::Error),
+}
+
+impl From<io::Error> for MalError {
+    fn from(value: io::Error) -> Self {
+        Self::IOError(value)
+    }
 }
 
 pub type MalResult = Result<MalType, MalError>;

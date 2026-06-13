@@ -22,13 +22,18 @@ pub fn pr_str(mal: MalType, readably: bool) -> String {
         }
         MalType::Vector(vec) => print_list(vec, ("[", "]"), readably),
         MalType::HashMap(map) => print_map(map, readably),
-        MalType::BuiltinFunc(_) => "#<builtin-function>".to_string(),
-        MalType::Lambda { .. } => "#<function>".to_string(),
+        MalType::BuiltinFunc(_) => "#<builtin>".to_string(),
+        MalType::Lambda { params, body, .. } => format!(
+            "(fn* {} {})",
+            pr_str(MalType::List(params), readably),
+            pr_str(*body, readably)
+        ),
+        MalType::Atom(inner) => format!("(atom {})", pr_str(inner.borrow().clone(), readably)),
     }
 }
 
 /// For printing `MalType::String`
-fn print_string_readably(string: &str) -> String {
+pub fn print_string_readably(string: &str) -> String {
     let mut output = String::from('"');
 
     for c in string.chars() {

@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::rc::Rc;
 
 mod core;
 mod env;
@@ -9,29 +10,69 @@ mod types;
 use env::Env;
 use types::{MalError, MalResult, MalType};
 
+thread_local! {
+    static REPL_ENV: Env = Env::new(None, vec![], vec![]).unwrap();
+}
+
 fn main() -> io::Result<()> {
-    let repl_env = Env::new(None, vec![], vec![]).unwrap();
-
-    for (key, val) in core::ns() {
-        repl_env.set(key.to_string(), val);
-    }
-
-    let _not_func_ = rep("(def! not (fn* (a) (if a false true)))", &repl_env).unwrap();
-
-    loop {
-        print!("user> ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        if input.is_empty() {
-            println!();
-            return Ok(());
-        } else if let Some(output) = rep(&input, &repl_env) {
-            println!("{output}");
+    REPL_ENV.with(|repl_env| {
+        for (key, val) in core::ns() {
+            repl_env.set(key.to_string(), val);
         }
-    }
+
+        repl_env.set(
+            "eval".to_string(),
+            MalType::BuiltinFunc(Rc::new(|mut args| {
+                if args.is_empty() {
+                    Err(MalError::EvalError("'eval' expects an arg".to_string()))
+                } else {
+                    REPL_ENV.with(|repl_env| eval(args.swap_remove(0), repl_env))
+                }
+            })),
+        );
+
+        let _not_func = rep("(def! not (fn* (a) (if a false true)))", repl_env).unwrap();
+        let _load_file_func = rep(
+            r#"(def! load-file (fn* (f) (eval (read-string (str "(do " (slurp f) "\nnil)")))))"#,
+            repl_env,
+        )
+        .unwrap();
+
+        let mut cmd_args = std::env::args();
+        let _arv0 = cmd_args.next().unwrap();
+
+        // non-interactive
+        if let Some(argv1) = cmd_args.next() {
+            let input = format!("(load-file {})", printer::print_string_readably(&argv1));
+
+            let argv = cmd_args.map(MalType::String).collect();
+            repl_env.set("*ARGV*".to_string(), MalType::List(argv));
+
+            if let Some(output) = rep(&input, repl_env)
+                && output != "nil"
+            {
+                println!("{output}");
+            }
+
+            return Ok(());
+        }
+
+        // interactive
+        loop {
+            print!("user> ");
+            io::stdout().flush()?;
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+
+            if input.is_empty() {
+                println!();
+                return Ok(());
+            } else if let Some(output) = rep(&input, repl_env) {
+                println!("{output}");
+            }
+        }
+    })
 }
 
 fn read(input: &str) -> MalResult {
@@ -225,6 +266,7 @@ fn print(mal: MalResult) -> Option<String> {
         Err(MalError::EmptyInput) => None,
         Err(MalError::ParseError(msg)) => Some(format!("mal: parse error: {msg}")),
         Err(MalError::EvalError(msg)) => Some(format!("mal: eval error: {msg}")),
+        Err(MalError::IOError(e)) => Some(format!("mal: IO error: {e}")),
     }
 }
 
