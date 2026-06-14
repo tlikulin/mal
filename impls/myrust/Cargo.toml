@@ -35,13 +35,13 @@ regex = "1.12.4"
 # name = "step5_tco"
 # path = "step5_tco.rs"
 
-[[bin]]
-name = "step6_file"
-path = "step6_file.rs"
-
 # [[bin]]
-# name = "step7_quote"
-# path = "step7_quote.rs"
+# name = "step6_file"
+# path = "step6_file.rs"
+
+[[bin]]
+name = "step7_quote"
+path = "step7_quote.rs"
 
 # [[bin]]
 # name = "step8_macros"

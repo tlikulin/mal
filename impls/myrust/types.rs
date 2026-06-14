@@ -27,6 +27,18 @@ impl MalType {
     pub const fn to_bool(&self) -> bool {
         !matches!(&self, Self::Nil | Self::Bool(false))
     }
+
+    pub fn is_list_with_sym(&self, sym: &str) -> bool {
+        if let Self::List(list) = self {
+            matches!(list.first(), Some(Self::Symbol(symbol)) if symbol == sym)
+        } else {
+            false
+        }
+    }
+
+    pub const fn is_vector(&self) -> bool {
+        matches!(self, Self::Vector(..))
+    }
 }
 
 impl PartialEq for MalType {
@@ -40,6 +52,7 @@ impl PartialEq for MalType {
             (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
             (Self::HashMap(l0), Self::HashMap(r0)) => l0 == r0,
             (Self::Nil, Self::Nil) => true,
+            (Self::Atom(l0), Self::Atom(r0)) => Rc::ptr_eq(l0, r0),
             _ => false,
         }
     }

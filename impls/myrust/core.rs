@@ -38,6 +38,9 @@ pub fn ns() -> Vec<(&'static str, MalType)> {
         ("deref", builtin_fn(deref)),
         ("reset!", builtin_fn(reset)),
         ("swap!", builtin_fn(swap)),
+        ("cons", builtin_fn(cons)),
+        ("concat", builtin_fn(concat)),
+        ("vec", builtin_fn(vec)),
     ]
 }
 
@@ -279,8 +282,8 @@ fn swap(args: Vec<MalType>) -> MalResult {
         let mut ast = vec![func, inner.borrow().clone()];
         ast.extend(it);
 
-        let fake_env = Env::new(None, vec![], vec![]).unwrap();
-        let new_value = crate::eval(MalType::List(ast), &fake_env)?;
+        let blank_env = Env::new(None, vec![], vec![]).unwrap();
+        let new_value = crate::eval(MalType::List(ast), &blank_env)?;
 
         inner.replace(new_value);
         Ok(inner.borrow().clone())
@@ -288,5 +291,49 @@ fn swap(args: Vec<MalType>) -> MalResult {
         Err(MalError::EvalError(
             "'swap!' expects an atom, a func (and args)".to_string(),
         ))
+    }
+}
+
+fn cons(args: Vec<MalType>) -> MalResult {
+    let mut it = args.into_iter();
+    if let (Some(first), Some(MalType::List(mut list) | MalType::Vector(mut list))) =
+        (it.next(), it.next())
+    {
+        list.insert(0, first);
+        Ok(MalType::List(list))
+    } else {
+        Err(MalError::EvalError(
+            "'cons' expects a value and a list/vector".to_string(),
+        ))
+    }
+}
+
+fn concat(args: Vec<MalType>) -> MalResult {
+    let mut result = Vec::new();
+    for arg in args {
+        let (MalType::List(list) | MalType::Vector(list)) = arg else {
+            return Err(MalError::EvalError(
+                "'concat' expects lists/vectors".to_string(),
+            ));
+        };
+
+        result.extend(list);
+    }
+    Ok(MalType::List(result))
+}
+
+fn vec(mut args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        return Err(MalError::EvalError(
+            "'vec' expects a list/vector".to_string(),
+        ));
+    }
+
+    match args.swap_remove(0) {
+        MalType::List(list) => Ok(MalType::Vector(list)),
+        vector @ MalType::Vector(_) => Ok(vector),
+        _ => Err(MalError::EvalError(
+            "'vec' expects a list/vector".to_string(),
+        )),
     }
 }
