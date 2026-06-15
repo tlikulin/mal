@@ -43,13 +43,13 @@ regex = "1.12.4"
 # name = "step7_quote"
 # path = "step7_quote.rs"
 
-[[bin]]
-name = "step8_macros"
-path = "step8_macros.rs"
-
 # [[bin]]
-# name = "step9_try"
-# path = "step9_try.rs"
+# name = "step8_macros"
+# path = "step8_macros.rs"
+
+[[bin]]
+name = "step9_try"
+path = "step9_try.rs"
 
 # [[bin]]
 # name = "stepA_mal"

@@ -86,11 +86,23 @@ pub enum MalError {
     ParseError(String),
     EvalError(String),
     IOError(io::Error),
+    Exception(MalType),
 }
 
 impl From<io::Error> for MalError {
     fn from(value: io::Error) -> Self {
         Self::IOError(value)
+    }
+}
+
+impl MalError {
+    pub fn into_mal(self) -> MalType {
+        match self {
+            Self::EmptyInput => MalType::String("no input".to_string()),
+            Self::ParseError(msg) | Self::EvalError(msg) => MalType::String(msg),
+            Self::IOError(e) => MalType::String(e.to_string()),
+            Self::Exception(mal) => mal,
+        }
     }
 }
 

@@ -188,6 +188,47 @@ fn eval(mut ast: MalType, orig_env: &Env) -> MalResult {
                     return eval_def(list, env, true);
                 }
 
+                Some(MalType::Symbol(sym)) if sym == "try*" => {
+                    let mut it = list.into_iter();
+                    let _try_perse = it.next().unwrap();
+
+                    let Some(expr) = it.next() else {
+                        return Err(MalError::EvalError("too few args to 'try*'".to_string()));
+                    };
+
+                    match eval(expr, env) {
+                        Err(exc) => {
+                            if let Some(catch_block) = it.next()
+                                && catch_block.is_list_with_sym("catch*")
+                            {
+                                let MalType::List(mut catch_list) = catch_block else {
+                                    unreachable!()
+                                };
+                                if catch_list.len() < 3 {
+                                    return Err(MalError::EvalError(
+                                        "too few args to 'catch*'".to_string(),
+                                    ));
+                                }
+                                if let (to_eval, MalType::Symbol(sym)) =
+                                    (catch_list.swap_remove(2), catch_list.swap_remove(1))
+                                {
+                                    live_env = Env::new(Some(env.clone()), vec![], vec![]).unwrap();
+                                    live_env.set(sym, exc.into_mal());
+                                    env = &live_env;
+                                    ast = to_eval;
+                                } else {
+                                    return Err(MalError::EvalError(
+                                        "'catch*' expects symbol to bind".to_string(),
+                                    ));
+                                }
+                            } else {
+                                return Err(exc);
+                            }
+                        }
+                        success => return success,
+                    }
+                }
+
                 // apply case
                 _ => {
                     let mut it = list.into_iter();
@@ -372,6 +413,10 @@ fn print(mal: MalResult) -> Option<String> {
         Err(MalError::ParseError(msg)) => Some(format!("mal: parse error: {msg}")),
         Err(MalError::EvalError(msg)) => Some(format!("mal: eval error: {msg}")),
         Err(MalError::IOError(e)) => Some(format!("mal: IO error: {e}")),
+        Err(MalError::Exception(exc)) => Some(format!(
+            "mal: uncaught exception: {}",
+            printer::pr_str(exc, true)
+        )),
     }
 }
 

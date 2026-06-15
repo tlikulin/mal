@@ -3,9 +3,8 @@
     clippy::unnecessary_wraps,
     reason = "must conform to same signature"
 )]
-use std::cell::RefCell;
 use std::fs;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use crate::env::Env;
 use crate::types::{MalError, MalResult, MalType};
@@ -45,6 +44,27 @@ pub fn ns() -> Vec<(&'static str, MalType)> {
         ("first", builtin_fn(first)),
         ("rest", builtin_fn(rest)),
         ("macro?", builtin_fn(is_macro)),
+        ("throw", builtin_fn(throw)),
+        ("apply", builtin_fn(apply)),
+        ("map", builtin_fn(map)),
+        ("nil?", builtin_fn(is_nil)),
+        ("true?", builtin_fn(is_true)),
+        ("false?", builtin_fn(is_false)),
+        ("symbol?", builtin_fn(is_symbol)),
+        ("symbol", builtin_fn(symbol)),
+        ("keyword", builtin_fn(keyword)),
+        ("keyword?", builtin_fn(is_keyword)),
+        ("vector", builtin_fn(vector)),
+        ("vector?", builtin_fn(is_vector)),
+        ("sequential?", builtin_fn(is_sequential)),
+        ("hash-map", builtin_fn(hashmap)),
+        ("map?", builtin_fn(is_map)),
+        ("assoc", builtin_fn(assoc)),
+        ("dissoc", builtin_fn(dissoc)),
+        ("get", builtin_fn(get)),
+        ("contains?", builtin_fn(contains)),
+        ("keys", builtin_fn(keys)),
+        ("vals", builtin_fn(vals)),
     ]
 }
 
@@ -104,8 +124,8 @@ fn div(mut args: Vec<MalType>) -> MalResult {
 }
 
 fn prn(args: Vec<MalType>) -> MalResult {
-    let Ok(MalType::String(s)) = prstr(args) else {
-        unreachable!("prstr() should not fail")
+    let MalType::String(s) = prstr(args).unwrap() else {
+        unreachable!()
     };
     println!("{s}");
     Ok(MalType::Nil)
@@ -402,4 +422,254 @@ fn is_macro(args: Vec<MalType>) -> MalResult {
         args.first(),
         Some(MalType::Lambda { is_macro: true, .. })
     )))
+}
+
+fn throw(mut args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        Err(MalError::EvalError("'throw' expects arg".to_string()))
+    } else {
+        Err(MalError::Exception(args.swap_remove(0)))
+    }
+}
+
+fn apply(mut args: Vec<MalType>) -> MalResult {
+    if args.len() < 2 {
+        Err(MalError::EvalError("too few args to 'apply'".to_string()))
+    } else if let Some(MalType::List(list) | MalType::Vector(list)) = args.pop() {
+        let func = args.remove(0);
+        args.extend(list);
+
+        match func {
+            MalType::BuiltinFunc(builtin) => builtin(args),
+            MalType::Lambda {
+                params,
+                body,
+                capt_env,
+                ..
+            } => {
+                let lambda_env = Env::new(Some(capt_env), params, args)?;
+                crate::eval(*body, &lambda_env)
+            }
+            _ => Err(MalError::EvalError("not callable".to_string())),
+        }
+    } else {
+        Err(MalError::EvalError(
+            "'apply' expects list/vector as last arg".to_string(),
+        ))
+    }
+}
+
+fn map(mut args: Vec<MalType>) -> MalResult {
+    if args.len() < 2 {
+        Err(MalError::EvalError("too few args to 'map'".to_string()))
+    } else if let (MalType::List(list) | MalType::Vector(list), func) =
+        (args.swap_remove(1), args.swap_remove(0))
+    {
+        match func {
+            MalType::BuiltinFunc(builtin) => {
+                let mut result = Vec::new();
+                for elt in list {
+                    result.push(builtin(vec![elt])?);
+                }
+                Ok(MalType::List(result))
+            }
+            MalType::Lambda {
+                params,
+                body,
+                capt_env,
+                ..
+            } => {
+                let mut result = Vec::new();
+                for elt in list {
+                    let lambda_env = Env::new(Some(capt_env.clone()), params.clone(), vec![elt])?;
+                    result.push(crate::eval(*body.clone(), &lambda_env)?);
+                }
+                Ok(MalType::List(result))
+            }
+            _ => Err(MalError::EvalError("not callable".to_string())),
+        }
+    } else {
+        Err(MalError::EvalError(
+            "'map' expects list/vector as 2nd arg".to_string(),
+        ))
+    }
+}
+
+fn is_nil(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Bool(matches!(args.first(), Some(MalType::Nil))))
+}
+
+fn is_true(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Bool(matches!(
+        args.first(),
+        Some(MalType::Bool(true))
+    )))
+}
+
+fn is_false(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Bool(matches!(
+        args.first(),
+        Some(MalType::Bool(false))
+    )))
+}
+
+fn is_symbol(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Bool(matches!(
+        args.first(),
+        Some(MalType::Symbol(..))
+    )))
+}
+
+fn symbol(mut args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        Err(MalError::EvalError("too few args to 'symbol'".to_string()))
+    } else if let MalType::String(sym) = args.swap_remove(0) {
+        Ok(MalType::Symbol(sym))
+    } else {
+        Err(MalError::EvalError("'symbol' expects string".to_string()))
+    }
+}
+
+fn keyword(mut args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        Err(MalError::EvalError("too few args to 'keyword'".to_string()))
+    } else {
+        match args.swap_remove(0) {
+            key @ MalType::Keyword(..) => Ok(key),
+            MalType::String(key) => Ok(MalType::Keyword(format!(":{key}\u{29E}"))),
+            _ => Err(MalError::EvalError("'keyword' expects string".to_string())),
+        }
+    }
+}
+
+fn is_keyword(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Bool(matches!(
+        args.first(),
+        Some(MalType::Keyword(..))
+    )))
+}
+
+const fn vector(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Vector(args))
+}
+
+fn is_vector(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Bool(matches!(
+        args.first(),
+        Some(MalType::Vector(..))
+    )))
+}
+
+fn is_sequential(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Bool(matches!(
+        args.first(),
+        Some(MalType::Vector(..) | MalType::List(..))
+    )))
+}
+
+fn hashmap(args: Vec<MalType>) -> MalResult {
+    reader::read_map(args).map_err(|e| match e {
+        MalError::ParseError(msg) => MalError::EvalError(msg),
+        _ => e,
+    })
+}
+
+fn is_map(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Bool(matches!(
+        args.first(),
+        Some(MalType::HashMap(..))
+    )))
+}
+
+fn assoc(mut args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        Err(MalError::EvalError("too few args to 'assoc'".to_string()))
+    } else if let MalType::HashMap(mut orig_map) = args.remove(0) {
+        let MalType::HashMap(extra_map) = hashmap(args)? else {
+            unreachable!()
+        };
+        orig_map.extend(extra_map);
+        Ok(MalType::HashMap(orig_map))
+    } else {
+        Err(MalError::EvalError(
+            "'assoc' expects map (and args)".to_string(),
+        ))
+    }
+}
+
+fn dissoc(mut args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        Err(MalError::EvalError("too few args to 'dissoc'".to_string()))
+    } else if let MalType::HashMap(mut map) = args.remove(0) {
+        for elt in &args {
+            let key = match elt {
+                MalType::String(string) => string,
+                MalType::Keyword(keyword) => keyword,
+                _ => return Err(MalError::EvalError("hash-map key not hashable".to_string())),
+            };
+            map.remove(key);
+        }
+        Ok(MalType::HashMap(map))
+    } else {
+        Err(MalError::EvalError(
+            "'dissoc' expects map (and args)".to_string(),
+        ))
+    }
+}
+
+fn get(mut args: Vec<MalType>) -> MalResult {
+    if let [MalType::HashMap(map), raw_key] = &mut args[..2] {
+        let key = match raw_key {
+            MalType::String(string) => string,
+            MalType::Keyword(keyword) => keyword,
+            _ => return Err(MalError::EvalError("hash-map key not hashable".to_string())),
+        };
+        Ok(map.remove(key).unwrap_or_default())
+    } else if matches!(args.first(), Some(MalType::Nil)) {
+        Ok(MalType::Nil)
+    } else {
+        Err(MalError::EvalError("'get' expects map and key".to_string()))
+    }
+}
+
+fn contains(args: Vec<MalType>) -> MalResult {
+    if let [MalType::HashMap(map), raw_key] = &args[..2] {
+        let key = match raw_key {
+            MalType::String(string) => string,
+            MalType::Keyword(keyword) => keyword,
+            _ => return Err(MalError::EvalError("hash-map key not hashable".to_string())),
+        };
+        Ok(MalType::Bool(map.contains_key(key)))
+    } else {
+        Err(MalError::EvalError(
+            "'contains?' expects map and key".to_string(),
+        ))
+    }
+}
+
+fn keys(mut args: Vec<MalType>) -> MalResult {
+    if !args.is_empty()
+        && let MalType::HashMap(map) = args.swap_remove(0)
+    {
+        let keys = map.into_keys().map(|key| {
+            if key.ends_with('\u{29E}') {
+                MalType::Keyword(key)
+            } else {
+                MalType::String(key)
+            }
+        });
+        Ok(MalType::List(keys.collect()))
+    } else {
+        Err(MalError::EvalError("'keys' expects map".to_string()))
+    }
+}
+
+fn vals(mut args: Vec<MalType>) -> MalResult {
+    if !args.is_empty()
+        && let MalType::HashMap(map) = args.swap_remove(0)
+    {
+        Ok(MalType::List(map.into_values().collect()))
+    } else {
+        Err(MalError::EvalError("'vals' expects map".to_string()))
+    }
 }

@@ -131,7 +131,7 @@ fn read_atom_string(token: &str) -> MalResult {
     }
 }
 
-fn read_map(list: Vec<MalType>) -> MalResult {
+pub fn read_map(list: Vec<MalType>) -> MalResult {
     if list.len() % 2 == 1 {
         return Err(ParseError(
             "hash-map can't have odd number of items".to_string(),
