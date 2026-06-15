@@ -19,6 +19,7 @@ pub enum MalType {
         params: Vec<Self>,
         body: Box<Self>,
         capt_env: Env,
+        is_macro: bool,
     },
     Atom(Rc<RefCell<Self>>),
 }
@@ -38,6 +39,21 @@ impl MalType {
 
     pub const fn is_vector(&self) -> bool {
         matches!(self, Self::Vector(..))
+    }
+
+    pub const fn set_macro(&mut self) {
+        if let Self::Lambda { is_macro, .. } = self {
+            *is_macro = true;
+        }
+    }
+
+    pub fn get_first(self) -> Option<Self> {
+        match self {
+            Self::Nil => Some(Self::Nil),
+            Self::List(list) | Self::Vector(list) if list.is_empty() => Some(Self::Nil),
+            Self::List(mut list) | Self::Vector(mut list) => Some(list.swap_remove(0)),
+            _ => None,
+        }
     }
 }
 

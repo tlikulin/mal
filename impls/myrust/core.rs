@@ -41,6 +41,10 @@ pub fn ns() -> Vec<(&'static str, MalType)> {
         ("cons", builtin_fn(cons)),
         ("concat", builtin_fn(concat)),
         ("vec", builtin_fn(vec)),
+        ("nth", builtin_fn(nth)),
+        ("first", builtin_fn(first)),
+        ("rest", builtin_fn(rest)),
+        ("macro?", builtin_fn(is_macro)),
     ]
 }
 
@@ -336,4 +340,66 @@ fn vec(mut args: Vec<MalType>) -> MalResult {
             "'vec' expects a list/vector".to_string(),
         )),
     }
+}
+
+fn nth(args: Vec<MalType>) -> MalResult {
+    let mut it = args.into_iter();
+    if let (Some(MalType::List(mut list) | MalType::Vector(mut list)), Some(MalType::Number(ind))) =
+        (it.next(), it.next())
+    {
+        match ind.try_into() {
+            Ok(ind) if ind < list.len() => Ok(list.swap_remove(ind)),
+            _ => Err(MalError::EvalError("out of bounds".to_string())),
+        }
+    } else {
+        Err(MalError::EvalError(
+            "'nth' expects list/vector and index".to_string(),
+        ))
+    }
+}
+
+fn first(mut args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        Err(MalError::EvalError(
+            "'first' expects list/vector/nil".to_string(),
+        ))
+    } else {
+        args.swap_remove(0).get_first().map_or_else(
+            || {
+                Err(MalError::EvalError(
+                    "'first' expects list/vector/nil".to_string(),
+                ))
+            },
+            Ok,
+        )
+    }
+}
+
+fn rest(mut args: Vec<MalType>) -> MalResult {
+    if args.is_empty() {
+        Err(MalError::EvalError(
+            "'rest' expects list/vector/nil".to_string(),
+        ))
+    } else {
+        match args.swap_remove(0) {
+            MalType::Nil => Ok(MalType::List(vec![])),
+            MalType::List(list) | MalType::Vector(list) if list.is_empty() => {
+                Ok(MalType::List(vec![]))
+            }
+            MalType::List(mut list) | MalType::Vector(mut list) => {
+                list.remove(0);
+                Ok(MalType::List(list))
+            }
+            _ => Err(MalError::EvalError(
+                "'rest' expects list/vector/nil".to_string(),
+            )),
+        }
+    }
+}
+
+fn is_macro(args: Vec<MalType>) -> MalResult {
+    Ok(MalType::Bool(matches!(
+        args.first(),
+        Some(MalType::Lambda { is_macro: true, .. })
+    )))
 }
