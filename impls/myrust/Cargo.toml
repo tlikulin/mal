@@ -47,10 +47,10 @@ regex = "1.12.4"
 # name = "step8_macros"
 # path = "step8_macros.rs"
 
-[[bin]]
-name = "step9_try"
-path = "step9_try.rs"
-
 # [[bin]]
-# name = "stepA_mal"
-# path = "stepA_mal.rs"
+# name = "step9_try"
+# path = "step9_try.rs"
+
+[[bin]]
+name = "stepA_mal"
+path = "stepA_mal.rs"

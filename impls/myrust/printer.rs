@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 
+use crate::types::new_list;
+
 use super::types::MalType;
 
 pub fn pr_str(mal: MalType, readably: bool) -> String {
     match mal {
         MalType::Number(num) => num.to_string(),
         MalType::Symbol(sym) => sym,
-        MalType::List(list) => print_list(list, ("(", ")"), readably),
+        MalType::List(list, ..) => print_list(list, ("(", ")"), readably),
         MalType::Nil => "nil".to_owned(),
         MalType::Bool(bool) => bool.to_string(),
         MalType::String(string) => {
@@ -20,12 +22,12 @@ pub fn pr_str(mal: MalType, readably: bool) -> String {
             assert_eq!(key.pop(), Some('\u{29E}'));
             key
         }
-        MalType::Vector(vec) => print_list(vec, ("[", "]"), readably),
-        MalType::HashMap(map) => print_map(map, readably),
-        MalType::BuiltinFunc(_) => "#<builtin>".to_string(),
+        MalType::Vector(vec, ..) => print_list(vec, ("[", "]"), readably),
+        MalType::HashMap(map, ..) => print_map(map, readably),
+        MalType::BuiltinFunc(..) => "#<builtin>".to_string(),
         MalType::Lambda { params, body, .. } => format!(
             "(fn* {} {})",
-            pr_str(MalType::List(params), readably),
+            pr_str(new_list(params), readably),
             pr_str(*body, readably)
         ),
         MalType::Atom(inner) => format!("(atom {})", pr_str(inner.borrow().clone(), readably)),

@@ -3,7 +3,9 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::types::{MalError, MalResult, MalType};
+use crate::types::{new_hashmap, new_list, new_vector};
+
+use crate::types::{MalError, MalResult, MalType};
 use MalError::{EmptyInput, ParseError};
 
 pub struct Reader {
@@ -53,8 +55,8 @@ fn tokenize(input: &str) -> VecDeque<String> {
 
 fn read_form(reader: &mut Reader) -> MalResult {
     match reader.peek() {
-        Some(t) if t == "(" => Ok(MalType::List(read_list(reader, ("(", ")"))?)),
-        Some(t) if t == "[" => Ok(MalType::Vector(read_list(reader, ("[", "]"))?)),
+        Some(t) if t == "(" => Ok(new_list(read_list(reader, ("(", ")"))?)),
+        Some(t) if t == "[" => Ok(new_vector(read_list(reader, ("[", "]"))?)),
         Some(t) if t == "{" => read_map(read_list(reader, ("{", "}"))?),
         Some(t) if is_macro(t) => read_macro(reader),
         Some(_) => read_atom(reader),
@@ -122,7 +124,7 @@ fn read_atom_string(token: &str) -> MalResult {
         }
 
         if escaped {
-            Err(ParseError("invalid string literal".to_string()))
+            Err(ParseError("unbalanced '\\'".to_string()))
         } else {
             Ok(MalType::String(string))
         }
@@ -152,7 +154,7 @@ pub fn read_map(list: Vec<MalType>) -> MalResult {
         map.insert(key, value);
     }
 
-    Ok(MalType::HashMap(map))
+    Ok(new_hashmap(map))
 }
 
 fn is_macro(token: &str) -> bool {
@@ -174,7 +176,7 @@ fn read_macro(reader: &mut Reader) -> MalResult {
         let target1 = read_form(reader)?;
         let target2 = read_form(reader)?;
 
-        Ok(MalType::List(vec![
+        Ok(new_list(vec![
             MalType::Symbol(macro_symbol),
             target2,
             target1,
@@ -182,6 +184,6 @@ fn read_macro(reader: &mut Reader) -> MalResult {
     } else {
         let target = read_form(reader)?;
 
-        Ok(MalType::List(vec![MalType::Symbol(macro_symbol), target]))
+        Ok(new_list(vec![MalType::Symbol(macro_symbol), target]))
     }
 }

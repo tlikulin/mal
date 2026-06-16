@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use crate::types::{MalError, MalResult, MalType};
+use crate::types::{MalError, MalResult, MalType, new_list};
 
 #[derive(Clone)]
 pub struct Env(Rc<RefCell<EnvInner>>);
@@ -28,7 +28,7 @@ impl Env {
                         return Err(MalError::EvalError("bind is not a symbol".to_string()));
                     };
 
-                    new_env.set(rest_sym, MalType::List(it_exprs.collect()));
+                    new_env.set(rest_sym, new_list(it_exprs.collect()));
                     break;
                 }
                 MalType::Symbol(sym) => {

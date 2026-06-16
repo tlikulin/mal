@@ -6,22 +6,35 @@ use crate::env::Env;
 pub enum MalType {
     Number(i64),
     Symbol(String),
-    List(Vec<Self>),
+    List(Vec<Self>, Box<Self>),
     #[default]
     Nil,
     Bool(bool),
     String(String),
     Keyword(String),
-    Vector(Vec<Self>),
-    HashMap(HashMap<String, Self>),
-    BuiltinFunc(Rc<dyn Fn(Vec<Self>) -> MalResult>),
+    Vector(Vec<Self>, Box<Self>),
+    HashMap(HashMap<String, Self>, Box<Self>),
+    BuiltinFunc(Rc<dyn Fn(Vec<Self>) -> MalResult>, Box<Self>),
     Lambda {
         params: Vec<Self>,
         body: Box<Self>,
         capt_env: Env,
         is_macro: bool,
+        meta: Box<Self>,
     },
     Atom(Rc<RefCell<Self>>),
+}
+
+pub fn new_list(list: Vec<MalType>) -> MalType {
+    MalType::List(list, Box::new(MalType::Nil))
+}
+
+pub fn new_vector(vector: Vec<MalType>) -> MalType {
+    MalType::Vector(vector, Box::new(MalType::Nil))
+}
+
+pub fn new_hashmap(hashmap: HashMap<String, MalType>) -> MalType {
+    MalType::HashMap(hashmap, Box::new(MalType::Nil))
 }
 
 impl MalType {
@@ -30,7 +43,7 @@ impl MalType {
     }
 
     pub fn is_list_with_sym(&self, sym: &str) -> bool {
-        if let Self::List(list) = self {
+        if let Self::List(list, ..) = self {
             matches!(list.first(), Some(Self::Symbol(symbol)) if symbol == sym)
         } else {
             false
@@ -50,8 +63,8 @@ impl MalType {
     pub fn get_first(self) -> Option<Self> {
         match self {
             Self::Nil => Some(Self::Nil),
-            Self::List(list) | Self::Vector(list) if list.is_empty() => Some(Self::Nil),
-            Self::List(mut list) | Self::Vector(mut list) => Some(list.swap_remove(0)),
+            Self::List(list, ..) | Self::Vector(list, ..) if list.is_empty() => Some(Self::Nil),
+            Self::List(mut list, ..) | Self::Vector(mut list, ..) => Some(list.swap_remove(0)),
             _ => None,
         }
     }
@@ -64,9 +77,12 @@ impl PartialEq for MalType {
             (Self::Symbol(l0), Self::Symbol(r0))
             | (Self::String(l0), Self::String(r0))
             | (Self::Keyword(l0), Self::Keyword(r0)) => l0 == r0,
-            (Self::List(l0) | Self::Vector(l0), Self::List(r0) | Self::Vector(r0)) => l0 == r0,
+            (
+                Self::List(l0, ..) | Self::Vector(l0, ..),
+                Self::List(r0, ..) | Self::Vector(r0, ..),
+            ) => l0 == r0,
             (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
-            (Self::HashMap(l0), Self::HashMap(r0)) => l0 == r0,
+            (Self::HashMap(l0, ..), Self::HashMap(r0, ..)) => l0 == r0,
             (Self::Nil, Self::Nil) => true,
             (Self::Atom(l0), Self::Atom(r0)) => Rc::ptr_eq(l0, r0),
             _ => false,
