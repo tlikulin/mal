@@ -1,2 +1,0 @@
-#!/bin/sh
-exec janet $(dirname $0)/${STEP:-stepA_mal}.janet "${@}"

@@ -1,2 +1,0 @@
-#!/usr/bin/env bash
-exec java -jar $(dirname $0)/${STEP:-stepA_mal}.jar "${@}"
