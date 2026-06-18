@@ -1,5 +1,7 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::collections::HashMap;
+use std::{cell::RefCell, rc::Rc};
 
+use crate::types::MalError::EvalError;
 use crate::types::{MalError, MalResult, MalType, new_list};
 
 #[derive(Clone)]
@@ -16,16 +18,14 @@ impl Env {
             outer,
         })));
 
-        let (mut it_binds, mut it_exprs) = (binds.into_iter(), exprs.into_iter());
+        let mut it_binds = binds.into_iter();
+        let mut it_exprs = exprs.into_iter();
 
         while let Some(bind) = it_binds.next() {
             match bind {
                 MalType::Symbol(sym) if sym == "&" => {
-                    let Some(rest_bind) = it_binds.next() else {
-                        return Err(MalError::EvalError("no bind after '&'".to_string()));
-                    };
-                    let MalType::Symbol(rest_sym) = rest_bind else {
-                        return Err(MalError::EvalError("bind is not a symbol".to_string()));
+                    let Some(MalType::Symbol(rest_sym)) = it_binds.next() else {
+                        return Err(EvalError("no symbol after &".to_string()));
                     };
 
                     new_env.set(rest_sym, new_list(it_exprs.collect()));
@@ -33,12 +33,12 @@ impl Env {
                 }
                 MalType::Symbol(sym) => {
                     let Some(expr) = it_exprs.next() else {
-                        return Err(MalError::EvalError("more args expected".to_string()));
+                        return Err(EvalError("more args expected".to_string()));
                     };
 
                     new_env.set(sym, expr);
                 }
-                _ => return Err(MalError::EvalError("bind is not a symbol".to_string())),
+                _ => return Err(EvalError("bind is not a symbol".to_string())),
             }
         }
 
@@ -53,7 +53,7 @@ impl Env {
         self.0.borrow().data.get(key).map_or_else(
             || {
                 self.0.borrow().outer.as_ref().map_or_else(
-                    || Err(MalError::EvalError(format!("'{key}' not found"))),
+                    || Err(EvalError(format!("'{key}' not found"))),
                     |outer| outer.get(key),
                 )
             },

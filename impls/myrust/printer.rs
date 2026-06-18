@@ -1,16 +1,14 @@
 use std::collections::HashMap;
 
-use crate::types::new_list;
-
-use super::types::MalType;
+use super::types::{MalType, new_list};
+use crate::reader::KW_SUFFIX;
 
 pub fn pr_str(mal: MalType, readably: bool) -> String {
     match mal {
+        MalType::Nil => "nil".to_string(),
+        MalType::Bool(bool) => bool.to_string(),
         MalType::Number(num) => num.to_string(),
         MalType::Symbol(sym) => sym,
-        MalType::List(list, ..) => print_list(list, ("(", ")"), readably),
-        MalType::Nil => "nil".to_owned(),
-        MalType::Bool(bool) => bool.to_string(),
         MalType::String(string) => {
             if readably {
                 print_string_readably(&string)
@@ -19,9 +17,10 @@ pub fn pr_str(mal: MalType, readably: bool) -> String {
             }
         }
         MalType::Keyword(mut key) => {
-            assert_eq!(key.pop(), Some('\u{29E}'));
+            key.pop();
             key
         }
+        MalType::List(list, ..) => print_list(list, ("(", ")"), readably),
         MalType::Vector(vec, ..) => print_list(vec, ("[", "]"), readably),
         MalType::HashMap(map, ..) => print_map(map, readably),
         MalType::BuiltinFunc(..) => "#<builtin>".to_string(),
@@ -68,19 +67,19 @@ fn print_list(list: Vec<MalType>, delims: (&str, &str), readably: bool) -> Strin
 fn print_map(map: HashMap<String, MalType>, readably: bool) -> String {
     let inner = map
         .into_iter()
-        .map(|(mut k, v)| {
+        .map(|(k, v)| {
             format!(
                 "{} {}",
-                if k.ends_with('\u{29E}') {
-                    k.pop();
-                    k
+                if k.ends_with(KW_SUFFIX) {
+                    pr_str(MalType::Keyword(k), readably)
                 } else {
-                    print_string_readably(&k)
+                    pr_str(MalType::String(k), readably)
                 },
                 pr_str(v, readably)
             )
         })
         .collect::<Vec<String>>()
         .join(" ");
+
     format!("{{{inner}}}")
 }

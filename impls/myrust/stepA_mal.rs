@@ -7,13 +7,18 @@ mod printer;
 mod reader;
 mod types;
 
-use env::Env;
-use types::{MalError, MalResult, MalType};
-
+use crate::env::Env;
+use crate::types::MalError::{EmptyInput, EvalError, Exception, IOError, ParseError};
+use crate::types::{MalResult, MalType};
 use crate::types::{new_hashmap, new_list, new_vector};
 
 thread_local! {
-    static REPL_ENV: Env = Env::new(None, vec![], vec![]).unwrap();
+    static REPL_ENV: Env = {
+        let Ok(env) = Env::new(None, vec![], vec![]) else {
+            unreachable!();
+        };
+        env
+    }
 }
 
 fn main() -> io::Result<()> {
@@ -26,11 +31,11 @@ fn main() -> io::Result<()> {
             "eval".to_string(),
             MalType::BuiltinFunc(Rc::new(|mut args| {
                 if args.is_empty() {
-                    Err(MalError::EvalError("'eval' expects an arg".to_string()))
+                    Err(EvalError("'eval' expects an arg".to_string()))
                 } else {
                     REPL_ENV.with(|repl_env| eval(args.swap_remove(0), repl_env))
                 }
-            }), Box::new(MalType::Nil)),
+            }), None),
         );
 
         let _not_func = rep("(def! not (fn* (a) (if a false true)))", repl_env);
@@ -100,32 +105,28 @@ fn eval(mut ast: MalType, orig_env: &Env) -> MalResult {
 
                 Some(MalType::Symbol(sym)) if sym == "let*" => {
                     if list.len() < 3 {
-                        return Err(MalError::EvalError("too few args to 'let*".to_string()));
+                        return Err(EvalError("too few args to 'let*".to_string()));
                     }
 
                     let mut it = list.into_iter();
-                    let _let_perse = it.next().unwrap();
+                    it.next(); // "let*"
 
-                    let new_env_list = match it.next().unwrap() {
-                        MalType::List(list, ..) => list,
-                        MalType::Vector(vec, ..) => vec,
-                        _ => {
-                            return Err(MalError::EvalError(
-                                "1st arg to 'let*' must be list".to_string(),
-                            ));
-                        }
+                    let (MalType::List(new_env_list, ..) | MalType::Vector(new_env_list, ..)) =
+                        it.next().unwrap()
+                    else {
+                        return Err(EvalError(
+                            "1st arg to 'let*' must be list/vector".to_string(),
+                        ));
                     };
 
                     ast = it.next().unwrap();
 
                     let mut it = new_env_list.into_iter();
-                    live_env = Env::new(Some(env.clone()), vec![], vec![]).unwrap();
+                    live_env = Env::new(Some(env.clone()), vec![], vec![])?;
 
                     while let (Some(raw_key), Some(raw_value)) = (it.next(), it.next()) {
                         let MalType::Symbol(key) = raw_key else {
-                            return Err(MalError::EvalError(
-                                "key in 'let*' is not symbol".to_string(),
-                            ));
+                            return Err(EvalError("key in 'let*' is not symbol".to_string()));
                         };
 
                         let value = eval(raw_value, &live_env)?;
@@ -143,17 +144,17 @@ fn eval(mut ast: MalType, orig_env: &Env) -> MalResult {
                     ast = list.pop().unwrap();
 
                     for to_eval in list.into_iter().skip(1) {
-                        let _evaled = eval(to_eval, env)?;
+                        eval(to_eval, env)?;
                     }
                 }
 
                 Some(MalType::Symbol(sym)) if sym == "if" => {
                     if list.len() < 3 {
-                        return Err(MalError::EvalError("too few args to 'if'".to_string()));
+                        return Err(EvalError("too few args to 'if'".to_string()));
                     }
 
                     let mut it = list.into_iter();
-                    let _if_perse = it.next().unwrap();
+                    it.next(); // "if"
 
                     let cond = eval(it.next().unwrap(), env)?;
                     let true_branch = it.next().unwrap();
@@ -172,16 +173,14 @@ fn eval(mut ast: MalType, orig_env: &Env) -> MalResult {
 
                 Some(MalType::Symbol(sym)) if sym == "quote" => {
                     if list.len() < 2 {
-                        return Err(MalError::EvalError("too few args to 'quote'".to_string()));
+                        return Err(EvalError("too few args to 'quote'".to_string()));
                     }
                     return Ok(list.swap_remove(1));
                 }
 
                 Some(MalType::Symbol(sym)) if sym == "quasiquote" => {
                     if list.len() < 2 {
-                        return Err(MalError::EvalError(
-                            "too few args to 'quasiquote'".to_string(),
-                        ));
+                        return Err(EvalError("too few args to 'quasiquote'".to_string()));
                     }
 
                     ast = quasiquote(list.swap_remove(1))?;
@@ -193,10 +192,10 @@ fn eval(mut ast: MalType, orig_env: &Env) -> MalResult {
 
                 Some(MalType::Symbol(sym)) if sym == "try*" => {
                     let mut it = list.into_iter();
-                    let _try_perse = it.next().unwrap();
+                    it.next(); // "try*"
 
                     let Some(expr) = it.next() else {
-                        return Err(MalError::EvalError("too few args to 'try*'".to_string()));
+                        return Err(EvalError("too few args to 'try*'".to_string()));
                     };
 
                     match eval(expr, env) {
@@ -207,20 +206,20 @@ fn eval(mut ast: MalType, orig_env: &Env) -> MalResult {
                                 let MalType::List(mut catch_list, ..) = catch_block else {
                                     unreachable!()
                                 };
+
                                 if catch_list.len() < 3 {
-                                    return Err(MalError::EvalError(
-                                        "too few args to 'catch*'".to_string(),
-                                    ));
+                                    return Err(EvalError("too few args to 'catch*'".to_string()));
                                 }
+
                                 if let (to_eval, MalType::Symbol(sym)) =
                                     (catch_list.swap_remove(2), catch_list.swap_remove(1))
                                 {
-                                    live_env = Env::new(Some(env.clone()), vec![], vec![]).unwrap();
+                                    live_env = Env::new(Some(env.clone()), vec![], vec![])?;
                                     live_env.set(sym, exc.into_mal());
                                     env = &live_env;
                                     ast = to_eval;
                                 } else {
-                                    return Err(MalError::EvalError(
+                                    return Err(EvalError(
                                         "'catch*' expects symbol to bind".to_string(),
                                     ));
                                 }
@@ -266,7 +265,7 @@ fn eval(mut ast: MalType, orig_env: &Env) -> MalResult {
                             let macro_env = Env::new(Some(capt_env), params, raw_args)?;
                             ast = eval(*body, &macro_env)?;
                         }
-                        _ => return Err(MalError::EvalError("not callable".to_string())),
+                        _ => return Err(EvalError("not callable".to_string())),
                     }
                 }
             },
@@ -294,17 +293,15 @@ fn eval(mut ast: MalType, orig_env: &Env) -> MalResult {
 
 fn eval_def(list: Vec<MalType>, env: &Env, is_macro: bool) -> MalResult {
     if list.len() < 3 {
-        return Err(MalError::EvalError(
-            "too few args to 'def!'('defmacro!')".to_string(),
-        ));
+        return Err(EvalError("too few args to 'def!/defmacro!'".to_string()));
     }
 
     let mut it = list.into_iter();
-    let _def_perse = it.next().unwrap();
+    it.next(); // "def!" or "defmacro!"
 
     let MalType::Symbol(key) = it.next().unwrap() else {
-        return Err(MalError::EvalError(
-            "1st arg to 'def!'('defmacro!') must be symbol".to_string(),
+        return Err(EvalError(
+            "1st arg to 'def!/defmacro!' must be symbol".to_string(),
         ));
     };
 
@@ -312,9 +309,7 @@ fn eval_def(list: Vec<MalType>, env: &Env, is_macro: bool) -> MalResult {
 
     if is_macro {
         if !matches!(value, MalType::Lambda { .. }) {
-            return Err(MalError::EvalError(
-                "'defmacro!' expects a function".to_string(),
-            ));
+            return Err(EvalError("'defmacro!' expects a function".to_string()));
         }
         value.set_macro();
     }
@@ -325,57 +320,50 @@ fn eval_def(list: Vec<MalType>, env: &Env, is_macro: bool) -> MalResult {
 
 fn eval_fn(list: Vec<MalType>, env: &Env) -> MalResult {
     if list.len() < 3 {
-        return Err(MalError::EvalError("too few args to 'fn*".to_string()));
+        return Err(EvalError("too few args to 'fn*".to_string()));
     }
 
     let mut it = list.into_iter();
-    let _fn_perse = it.next().unwrap();
+    it.next(); // "fn*"
 
-    let binds = match it.next().unwrap() {
-        MalType::List(l, ..) => l,
-        MalType::Vector(v, ..) => v,
-        _ => {
-            return Err(MalError::EvalError(
-                "1st arg to 'fn*' must be list/vector".to_string(),
-            ));
-        }
+    let (MalType::List(params, ..) | MalType::Vector(params, ..)) = it.next().unwrap() else {
+        return Err(EvalError(
+            "1st arg to 'fn*' must be list/vector".to_string(),
+        ));
     };
     let body = Box::new(it.next().unwrap());
 
     Ok(MalType::Lambda {
-        params: binds,
+        params,
         body,
         capt_env: env.clone(),
         is_macro: false,
-        meta: Box::new(MalType::Nil),
+        meta: None,
     })
 }
 
 fn quasiquote(ast: MalType) -> MalResult {
-    let was_vector = ast.is_vector();
+    let was_vector = matches!(ast, MalType::Vector(..));
+
     match ast {
         MalType::List(mut list, ..) if ast.is_list_with_sym("unquote") => {
             if list.len() < 2 {
-                Err(MalError::EvalError(
-                    "too few args too 'unquote'".to_string(),
-                ))
+                Err(EvalError("too few args too 'unquote'".to_string()))
             } else {
                 Ok(list.swap_remove(1))
             }
         }
 
-        MalType::List(list, ..) | MalType::Vector(list, ..) => {
+        MalType::List(seq, ..) | MalType::Vector(seq, ..) => {
             let mut result = Vec::new();
 
-            for elt in list.into_iter().rev() {
+            for elt in seq.into_iter().rev() {
                 if elt.is_list_with_sym("splice-unquote") {
                     let MalType::List(mut elt_list, ..) = elt else {
                         unreachable!()
                     };
                     if elt_list.len() < 2 {
-                        return Err(MalError::EvalError(
-                            "too few args too 'splice-unquote'".to_string(),
-                        ));
+                        return Err(EvalError("too few args too 'splice-unquote'".to_string()));
                     }
 
                     result = vec![
@@ -411,11 +399,11 @@ fn quasiquote(ast: MalType) -> MalResult {
 fn print(mal: MalResult) -> Option<String> {
     match mal {
         Ok(mal) => Some(printer::pr_str(mal, true)),
-        Err(MalError::EmptyInput) => None,
-        Err(MalError::ParseError(msg)) => Some(format!("mal: parse error: {msg}")),
-        Err(MalError::EvalError(msg)) => Some(format!("mal: eval error: {msg}")),
-        Err(MalError::IOError(e)) => Some(format!("mal: IO error: {e}")),
-        Err(MalError::Exception(exc)) => Some(format!(
+        Err(EmptyInput) => None,
+        Err(ParseError(msg)) => Some(format!("mal: parse error: {msg}")),
+        Err(EvalError(msg)) => Some(format!("mal: eval error: {msg}")),
+        Err(IOError(e)) => Some(format!("mal: IO error: {e}")),
+        Err(Exception(exc)) => Some(format!(
             "mal: uncaught exception: {}",
             printer::pr_str(exc, true)
         )),

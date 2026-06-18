@@ -3,12 +3,13 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::types::{new_hashmap, new_list, new_vector};
-
 use crate::types::{MalError, MalResult, MalType};
+use crate::types::{new_hashmap, new_list, new_vector};
 use MalError::{EmptyInput, ParseError};
 
-pub struct Reader {
+pub const KW_SUFFIX: char = '\u{29E}';
+
+struct Reader {
     tokens: VecDeque<String>,
 }
 
@@ -31,8 +32,8 @@ impl Reader {
 }
 
 pub fn read_str(input: &str) -> MalResult {
-    let tokens = tokenize(input);
-    let mut reader = Reader::new(tokens);
+    let mut reader = Reader::new(tokenize(input));
+
     if reader.is_empty() {
         Err(EmptyInput)
     } else {
@@ -40,11 +41,12 @@ pub fn read_str(input: &str) -> MalResult {
     }
 }
 
-static TOKEN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"[\s,]*(~@|[\[\]{}()'`~^@]|"(?:\\.|[^\\"])*"?|;.*|[^\s\[\]{}('"`,;)]*)"#).unwrap()
-});
-
 fn tokenize(input: &str) -> VecDeque<String> {
+    static TOKEN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"[\s,]*(~@|[\[\]{}()'`~^@]|"(?:\\.|[^\\"])*"?|;.*|[^\s\[\]{}('"`,;)]*)"#)
+            .unwrap()
+    });
+
     TOKEN_REGEX
         .captures_iter(input)
         .map(|mat| String::from(&mat[1]))
@@ -66,13 +68,13 @@ fn read_form(reader: &mut Reader) -> MalResult {
 
 fn read_list(reader: &mut Reader, delims: (&str, &str)) -> Result<Vec<MalType>, MalError> {
     let mut list = Vec::new();
-    assert_eq!(reader.next(), delims.0);
+    let _open_delim = reader.next();
 
     while !reader.is_empty() {
         if let Some(t) = reader.peek()
             && t == delims.1
         {
-            assert_eq!(reader.next(), delims.1);
+            let _close_delim = reader.next();
             return Ok(list);
         }
 
@@ -91,7 +93,7 @@ fn read_atom(reader: &mut Reader) -> MalResult {
             "true" => Ok(MalType::Bool(true)),
             "false" => Ok(MalType::Bool(false)),
             t if t.starts_with('"') => read_atom_string(&token),
-            t if t.starts_with(':') => Ok(MalType::Keyword(token + "\u{29E}")),
+            t if t.starts_with(':') => Ok(MalType::Keyword(format!("{token}{KW_SUFFIX}"))),
             ")" | "]" | "}" => Err(ParseError(format!("unbalanced '{token}'"))),
             _ => Ok(MalType::Symbol(token)),
         },
@@ -100,7 +102,6 @@ fn read_atom(reader: &mut Reader) -> MalResult {
 }
 
 fn read_atom_string(token: &str) -> MalResult {
-    assert!(token.starts_with('"'));
     if token.len() >= 2 && token.ends_with('"') {
         let mut string = String::new();
         let mut escaped = false;
@@ -135,9 +136,7 @@ fn read_atom_string(token: &str) -> MalResult {
 
 pub fn read_map(list: Vec<MalType>) -> MalResult {
     if list.len() % 2 == 1 {
-        return Err(ParseError(
-            "hash-map can't have odd number of items".to_string(),
-        ));
+        return Err(ParseError("odd number of items in {} literal".to_string()));
     }
 
     let mut map = HashMap::new();
@@ -145,13 +144,7 @@ pub fn read_map(list: Vec<MalType>) -> MalResult {
     let mut it = list.into_iter();
 
     while let (Some(raw_key), Some(value)) = (it.next(), it.next()) {
-        let key = match raw_key {
-            MalType::String(string) => string,
-            MalType::Keyword(keyword) => keyword,
-            _ => return Err(ParseError("hash-map key not hashable".to_string())),
-        };
-
-        map.insert(key, value);
+        map.insert(raw_key.to_key()?.to_owned(), value);
     }
 
     Ok(new_hashmap(map))
@@ -169,7 +162,7 @@ fn read_macro(reader: &mut Reader) -> MalResult {
         "~@" => String::from("splice-unquote"),
         "@" => String::from("deref"),
         "^" => String::from("with-meta"),
-        t => unreachable!("{t} is not a valid quote kind"),
+        t => unreachable!("{t} is not a valid reader macro"),
     };
 
     if macro_symbol == "with-meta" {

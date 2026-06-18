@@ -1,16 +1,20 @@
 #![allow(
     clippy::needless_pass_by_value,
     clippy::unnecessary_wraps,
-    reason = "must conform to same signature"
+    reason = "builtins must conform to same fn signature"
 )]
-use std::io::Write;
+
+use std::fs;
+use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cell::RefCell, rc::Rc};
-use std::{fs, io};
 
 use crate::env::Env;
-use crate::types::{MalError, MalResult, MalType, new_hashmap, new_list, new_vector};
-use crate::{printer, reader};
+use crate::printer;
+use crate::reader::{self, KW_SUFFIX};
+use crate::types::MalError::{EvalError, Exception, ParseError};
+use crate::types::{MalResult, MalType};
+use crate::types::{new_hashmap, new_list, new_vector};
 
 pub fn ns() -> Vec<(&'static str, MalType)> {
     vec![
@@ -80,76 +84,67 @@ pub fn ns() -> Vec<(&'static str, MalType)> {
     ]
 }
 
-fn builtin_fn<F>(func: F) -> MalType
-where
-    F: Fn(Vec<MalType>) -> MalResult + 'static,
-{
-    MalType::BuiltinFunc(Rc::new(func), Box::new(MalType::Nil))
+// helpers
+
+fn builtin_fn<F: Fn(Vec<MalType>) -> MalResult + 'static>(func: F) -> MalType {
+    MalType::BuiltinFunc(Rc::new(func), None)
 }
 
-fn add(mut args: Vec<MalType>) -> MalResult {
+fn arithmetic(mut args: Vec<MalType>, calc: impl Fn(i64, i64) -> i64, op: char) -> MalResult {
     if args.len() < 2 {
-        Err(MalError::EvalError("too few args to '+'".to_string()))
+        Err(EvalError(format!("too few args to '{op}'")))
     } else if let (MalType::Number(b), MalType::Number(a)) =
         (args.swap_remove(1), args.swap_remove(0))
     {
-        Ok(MalType::Number(a + b))
+        Ok(MalType::Number(calc(a, b)))
     } else {
-        Err(MalError::EvalError("'+' expects numbers".to_string()))
+        Err(EvalError(format!("'{op}' expects numbers")))
     }
 }
 
-fn sub(mut args: Vec<MalType>) -> MalResult {
+fn numeric_cmp(args: Vec<MalType>, cmp: impl Fn(&i64, &i64) -> bool, op: &str) -> MalResult {
     if args.len() < 2 {
-        Err(MalError::EvalError("too few args to '-'".to_string()))
-    } else if let (MalType::Number(b), MalType::Number(a)) =
-        (args.swap_remove(1), args.swap_remove(0))
-    {
-        Ok(MalType::Number(a - b))
+        Err(EvalError(format!("too few args to '{op}'")))
+    } else if let (MalType::Number(a), MalType::Number(b)) = (&args[0], &args[1]) {
+        Ok(MalType::Bool(cmp(a, b)))
     } else {
-        Err(MalError::EvalError("'-' expects numbers".to_string()))
+        Err(EvalError(format!("'{op}' expects 2 numbers")))
     }
 }
 
-fn mult(mut args: Vec<MalType>) -> MalResult {
-    if args.len() < 2 {
-        Err(MalError::EvalError("too few args to '*'".to_string()))
-    } else if let (MalType::Number(b), MalType::Number(a)) =
-        (args.swap_remove(1), args.swap_remove(0))
-    {
-        Ok(MalType::Number(a * b))
-    } else {
-        Err(MalError::EvalError("'*' expects numbers".to_string()))
-    }
+// actual builtins
+
+fn add(args: Vec<MalType>) -> MalResult {
+    arithmetic(args, |a, b| a + b, '+')
 }
 
-fn div(mut args: Vec<MalType>) -> MalResult {
-    if args.len() < 2 {
-        Err(MalError::EvalError("too few args to '/'".to_string()))
-    } else if let (MalType::Number(b), MalType::Number(a)) =
-        (args.swap_remove(1), args.swap_remove(0))
-    {
-        Ok(MalType::Number(a / b))
-    } else {
-        Err(MalError::EvalError("'/' expects numbers".to_string()))
-    }
+fn sub(args: Vec<MalType>) -> MalResult {
+    arithmetic(args, |a, b| a - b, '-')
+}
+
+fn mult(args: Vec<MalType>) -> MalResult {
+    arithmetic(args, |a, b| a * b, '*')
+}
+
+fn div(args: Vec<MalType>) -> MalResult {
+    arithmetic(args, |a, b| a / b, '/')
 }
 
 fn prn(args: Vec<MalType>) -> MalResult {
-    let MalType::String(s) = prstr(args).unwrap() else {
+    let Ok(MalType::String(s)) = prstr(args) else {
         unreachable!()
     };
     println!("{s}");
     Ok(MalType::Nil)
 }
 
-fn list(args: Vec<MalType>) -> MalResult {
+const fn list(args: Vec<MalType>) -> MalResult {
     Ok(new_list(args))
 }
 
 fn is_list(args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'list?'".to_string()))
+        Err(EvalError("too few args to 'list?'".to_string()))
     } else {
         Ok(MalType::Bool(matches!(args[0], MalType::List(..))))
     }
@@ -157,76 +152,48 @@ fn is_list(args: Vec<MalType>) -> MalResult {
 
 fn is_empty(args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'empty?'".to_string()))
-    } else if let MalType::List(inner, ..) | MalType::Vector(inner, ..) = &args[0] {
-        Ok(MalType::Bool(inner.is_empty()))
+        Err(EvalError("too few args to 'empty?'".to_string()))
+    } else if let MalType::List(seq, ..) | MalType::Vector(seq, ..) = &args[0] {
+        Ok(MalType::Bool(seq.is_empty()))
     } else {
-        Err(MalError::EvalError(
-            "'empty?' expects list/vector".to_string(),
-        ))
+        Err(EvalError("'empty?' expects list/vector".to_string()))
     }
 }
 
 fn count(args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'count'".to_string()))
-    } else if let MalType::List(inner, ..) | MalType::Vector(inner, ..) = &args[0] {
-        Ok(MalType::Number(inner.len().try_into().unwrap()))
+        Err(EvalError("too few args to 'count'".to_string()))
+    } else if let MalType::List(seq, ..) | MalType::Vector(seq, ..) = &args[0] {
+        Ok(MalType::Number(seq.len().try_into().unwrap()))
     } else if matches!(&args[0], MalType::Nil) {
         Ok(MalType::Number(0))
     } else {
-        Err(MalError::EvalError(
-            "'count' expects list/vector/nil".to_string(),
-        ))
+        Err(EvalError("'count' expects list/vector/nil".to_string()))
     }
 }
 
 fn eq(args: Vec<MalType>) -> MalResult {
     if args.len() < 2 {
-        Err(MalError::EvalError("too few args to '='".to_string()))
+        Err(EvalError("too few args to '='".to_string()))
     } else {
         Ok(MalType::Bool(args[0] == args[1]))
     }
 }
 
 fn lt(args: Vec<MalType>) -> MalResult {
-    if args.len() < 2 {
-        Err(MalError::EvalError("too few args to '<'".to_string()))
-    } else if let (MalType::Number(n1), MalType::Number(n2)) = (&args[0], &args[1]) {
-        Ok(MalType::Bool(n1 < n2))
-    } else {
-        Err(MalError::EvalError("'<' expects numbers".to_string()))
-    }
+    numeric_cmp(args, |a, b| a < b, "<")
 }
 
 fn le(args: Vec<MalType>) -> MalResult {
-    if args.len() < 2 {
-        Err(MalError::EvalError("too few args to '<='".to_string()))
-    } else if let (MalType::Number(n1), MalType::Number(n2)) = (&args[0], &args[1]) {
-        Ok(MalType::Bool(n1 <= n2))
-    } else {
-        Err(MalError::EvalError("'<=' expects numbers".to_string()))
-    }
+    numeric_cmp(args, |a, b| a <= b, "<=")
 }
 
 fn gt(args: Vec<MalType>) -> MalResult {
-    if args.len() < 2 {
-        Err(MalError::EvalError("too few args to '>'".to_string()))
-    } else if let (MalType::Number(n1), MalType::Number(n2)) = (&args[0], &args[1]) {
-        Ok(MalType::Bool(n1 > n2))
-    } else {
-        Err(MalError::EvalError("'>' expects numbers".to_string()))
-    }
+    numeric_cmp(args, |a, b| a > b, ">")
 }
 
 fn ge(args: Vec<MalType>) -> MalResult {
-    if args.len() < 2 {
-        Err(MalError::EvalError("too few args to '>='".to_string()))
-    } else if let (MalType::Number(n1), MalType::Number(n2)) = (&args[0], &args[1]) {
-        Ok(MalType::Bool(n1 >= n2))
-    } else {
-        Err(MalError::EvalError("'>=' expects numbers".to_string()))
-    }
+    numeric_cmp(args, |a, b| a >= b, ">=")
 }
 
 fn prstr(args: Vec<MalType>) -> MalResult {
@@ -251,19 +218,17 @@ fn println(args: Vec<MalType>) -> MalResult {
         "{}",
         args.into_iter()
             .map(|mal| printer::pr_str(mal, false))
-            .collect::<Vec<_>>()
+            .collect::<Vec<String>>()
             .join(" ")
     );
     Ok(MalType::Nil)
 }
 
 fn read_string(args: Vec<MalType>) -> MalResult {
-    match args.first() {
-        Some(MalType::String(string)) => reader::read_str(string),
-        Some(_) => Err(MalError::EvalError(
-            "'read_string' expects string".to_string(),
-        )),
-        None => Err(MalError::EmptyInput),
+    if let Some(MalType::String(string)) = args.first() {
+        reader::read_str(string)
+    } else {
+        Err(EvalError("'read_string' expects string".to_string()))
     }
 }
 
@@ -272,50 +237,47 @@ fn slurp(args: Vec<MalType>) -> MalResult {
         let contents = fs::read_to_string(filename)?;
         Ok(MalType::String(contents))
     } else {
-        Err(MalError::EvalError("'slurp' expects string".to_string()))
+        Err(EvalError("'slurp' expects string".to_string()))
     }
 }
 
 fn atom(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("'atom' expects an arg".to_string()))
+        Err(EvalError("'atom' expects value".to_string()))
     } else {
         Ok(MalType::Atom(Rc::new(RefCell::new(args.swap_remove(0)))))
     }
 }
 
 fn is_atom(args: Vec<MalType>) -> MalResult {
-    if args.is_empty() {
-        Err(MalError::EvalError("'atom?' expects an arg".to_string()))
-    } else {
-        Ok(MalType::Bool(matches!(args[0], MalType::Atom(_))))
-    }
+    Ok(MalType::Bool(matches!(
+        args.first(),
+        Some(MalType::Atom(..))
+    )))
 }
 
 fn deref(args: Vec<MalType>) -> MalResult {
-    if let Some(MalType::Atom(inner)) = args.first() {
-        Ok(inner.borrow().clone())
+    if let Some(MalType::Atom(atom)) = args.first() {
+        Ok(atom.borrow().clone())
     } else {
-        Err(MalError::EvalError("'deref' expects an atom".to_string()))
+        Err(EvalError("'deref' expects an atom".to_string()))
     }
 }
 
 fn reset(args: Vec<MalType>) -> MalResult {
     let mut it = args.into_iter();
-    if let (Some(MalType::Atom(inner)), Some(mal)) = (it.next(), it.next()) {
-        inner.replace(mal);
-        Ok(inner.borrow().clone())
+    if let (Some(MalType::Atom(atom)), Some(mal)) = (it.next(), it.next()) {
+        atom.replace(mal.clone());
+        Ok(mal)
     } else {
-        Err(MalError::EvalError(
-            "'reset!' expects atom and value".to_string(),
-        ))
+        Err(EvalError("'reset!' expects atom and value".to_string()))
     }
 }
 
 fn swap(args: Vec<MalType>) -> MalResult {
     let mut it = args.into_iter();
-    if let (Some(MalType::Atom(inner)), Some(func)) = (it.next(), it.next()) {
-        let mut fn_args = vec![inner.borrow().clone()];
+    if let (Some(MalType::Atom(atom)), Some(func)) = (it.next(), it.next()) {
+        let mut fn_args = vec![atom.borrow().clone()];
         fn_args.extend(it);
 
         let new_value = match func {
@@ -329,13 +291,13 @@ fn swap(args: Vec<MalType>) -> MalResult {
                 let lambda_env = Env::new(Some(capt_env), params, fn_args)?;
                 crate::eval(*body, &lambda_env)
             }
-            _ => Err(MalError::EvalError("not callable".to_string())),
+            _ => Err(EvalError("not callable".to_string())),
         }?;
 
-        inner.replace(new_value);
-        Ok(inner.borrow().clone())
+        atom.replace(new_value.clone());
+        Ok(new_value)
     } else {
-        Err(MalError::EvalError(
+        Err(EvalError(
             "'swap!' expects atom, func (and args)".to_string(),
         ))
     }
@@ -343,14 +305,14 @@ fn swap(args: Vec<MalType>) -> MalResult {
 
 fn cons(args: Vec<MalType>) -> MalResult {
     let mut it = args.into_iter();
-    if let (Some(first), Some(MalType::List(mut list, ..) | MalType::Vector(mut list, ..))) =
+    if let (Some(first), Some(MalType::List(mut seq, ..) | MalType::Vector(mut seq, ..))) =
         (it.next(), it.next())
     {
-        list.insert(0, first);
-        Ok(new_list(list))
+        seq.insert(0, first);
+        Ok(new_list(seq))
     } else {
-        Err(MalError::EvalError(
-            "'cons' expects a value and a list/vector".to_string(),
+        Err(EvalError(
+            "'cons' expects value and list/vector".to_string(),
         ))
     }
 }
@@ -358,73 +320,61 @@ fn cons(args: Vec<MalType>) -> MalResult {
 fn concat(args: Vec<MalType>) -> MalResult {
     let mut result = Vec::new();
     for arg in args {
-        let (MalType::List(list, ..) | MalType::Vector(list, ..)) = arg else {
-            return Err(MalError::EvalError(
-                "'concat' expects lists/vectors".to_string(),
-            ));
+        let (MalType::List(seq, ..) | MalType::Vector(seq, ..)) = arg else {
+            return Err(EvalError("'concat' expects lists/vectors".to_string()));
         };
 
-        result.extend(list);
+        result.extend(seq);
     }
     Ok(new_list(result))
 }
 
 fn vec(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        return Err(MalError::EvalError(
-            "'vec' expects a list/vector".to_string(),
-        ));
-    }
-
-    match args.swap_remove(0) {
-        MalType::List(list, ..) => Ok(new_vector(list)),
-        vector @ MalType::Vector(..) => Ok(vector),
-        _ => Err(MalError::EvalError(
-            "'vec' expects a list/vector".to_string(),
-        )),
+        Err(EvalError("'vec' expects list/vector".to_string()))
+    } else {
+        match args.swap_remove(0) {
+            MalType::List(list, ..) => Ok(new_vector(list)),
+            vector @ MalType::Vector(..) => Ok(vector),
+            _ => Err(EvalError("'vec' expects list/vector".to_string())),
+        }
     }
 }
 
 fn nth(args: Vec<MalType>) -> MalResult {
     let mut it = args.into_iter();
     if let (
-        Some(MalType::List(mut list, ..) | MalType::Vector(mut list, ..)),
+        Some(MalType::List(mut seq, ..) | MalType::Vector(mut seq, ..)),
         Some(MalType::Number(ind)),
     ) = (it.next(), it.next())
     {
         match ind.try_into() {
-            Ok(ind) if ind < list.len() => Ok(list.swap_remove(ind)),
-            _ => Err(MalError::EvalError("out of bounds".to_string())),
+            Ok(ind) if ind < seq.len() => Ok(seq.swap_remove(ind)),
+            _ => Err(EvalError("out of bounds".to_string())),
         }
     } else {
-        Err(MalError::EvalError(
-            "'nth' expects list/vector and index".to_string(),
+        Err(EvalError(
+            "'nth' expects list/vector and number".to_string(),
         ))
     }
 }
 
 fn first(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError(
-            "'first' expects list/vector/nil".to_string(),
-        ))
+        Err(EvalError("'first' expects list/vector/nil".to_string()))
     } else {
-        args.swap_remove(0).get_first().map_or_else(
-            || {
-                Err(MalError::EvalError(
-                    "'first' expects list/vector/nil".to_string(),
-                ))
-            },
-            Ok,
-        )
+        match args.swap_remove(0) {
+            MalType::Nil => Ok(MalType::Nil),
+            MalType::List(seq, ..) | MalType::Vector(seq, ..) if seq.is_empty() => Ok(MalType::Nil),
+            MalType::List(mut seq, ..) | MalType::Vector(mut seq, ..) => Ok(seq.swap_remove(0)),
+            _ => Err(EvalError("'first' expects list/vector/nil".to_string())),
+        }
     }
 }
 
 fn rest(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError(
-            "'rest' expects list/vector/nil".to_string(),
-        ))
+        Err(EvalError("'rest' expects list/vector/nil".to_string()))
     } else {
         match args.swap_remove(0) {
             MalType::Nil => Ok(new_list(vec![])),
@@ -435,9 +385,7 @@ fn rest(mut args: Vec<MalType>) -> MalResult {
                 list.remove(0);
                 Ok(new_list(list))
             }
-            _ => Err(MalError::EvalError(
-                "'rest' expects list/vector/nil".to_string(),
-            )),
+            _ => Err(EvalError("'rest' expects list/vector/nil".to_string())),
         }
     }
 }
@@ -451,18 +399,18 @@ fn is_macro(args: Vec<MalType>) -> MalResult {
 
 fn throw(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("'throw' expects arg".to_string()))
+        Err(EvalError("'throw' expects arg".to_string()))
     } else {
-        Err(MalError::Exception(args.swap_remove(0)))
+        Err(Exception(args.swap_remove(0)))
     }
 }
 
 fn apply(mut args: Vec<MalType>) -> MalResult {
     if args.len() < 2 {
-        Err(MalError::EvalError("too few args to 'apply'".to_string()))
-    } else if let Some(MalType::List(list, ..) | MalType::Vector(list, ..)) = args.pop() {
+        Err(EvalError("too few args to 'apply'".to_string()))
+    } else if let Some(MalType::List(seq, ..) | MalType::Vector(seq, ..)) = args.pop() {
         let func = args.remove(0);
-        args.extend(list);
+        args.extend(seq);
 
         match func {
             MalType::BuiltinFunc(builtin, ..) => builtin(args),
@@ -475,10 +423,10 @@ fn apply(mut args: Vec<MalType>) -> MalResult {
                 let lambda_env = Env::new(Some(capt_env), params, args)?;
                 crate::eval(*body, &lambda_env)
             }
-            _ => Err(MalError::EvalError("not callable".to_string())),
+            _ => Err(EvalError("not callable".to_string())),
         }
     } else {
-        Err(MalError::EvalError(
+        Err(EvalError(
             "'apply' expects list/vector as last arg".to_string(),
         ))
     }
@@ -486,14 +434,14 @@ fn apply(mut args: Vec<MalType>) -> MalResult {
 
 fn map(mut args: Vec<MalType>) -> MalResult {
     if args.len() < 2 {
-        Err(MalError::EvalError("too few args to 'map'".to_string()))
-    } else if let (MalType::List(list, ..) | MalType::Vector(list, ..), func) =
+        Err(EvalError("too few args to 'map'".to_string()))
+    } else if let (MalType::List(seq, ..) | MalType::Vector(seq, ..), func) =
         (args.swap_remove(1), args.swap_remove(0))
     {
         match func {
             MalType::BuiltinFunc(builtin, ..) => {
                 let mut result = Vec::new();
-                for elt in list {
+                for elt in seq {
                     result.push(builtin(vec![elt])?);
                 }
                 Ok(new_list(result))
@@ -505,16 +453,16 @@ fn map(mut args: Vec<MalType>) -> MalResult {
                 ..
             } => {
                 let mut result = Vec::new();
-                for elt in list {
+                for elt in seq {
                     let lambda_env = Env::new(Some(capt_env.clone()), params.clone(), vec![elt])?;
                     result.push(crate::eval(*body.clone(), &lambda_env)?);
                 }
                 Ok(new_list(result))
             }
-            _ => Err(MalError::EvalError("not callable".to_string())),
+            _ => Err(EvalError("not callable".to_string())),
         }
     } else {
-        Err(MalError::EvalError(
+        Err(EvalError(
             "'map' expects list/vector as 2nd arg".to_string(),
         ))
     }
@@ -547,22 +495,22 @@ fn is_symbol(args: Vec<MalType>) -> MalResult {
 
 fn symbol(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'symbol'".to_string()))
+        Err(EvalError("too few args to 'symbol'".to_string()))
     } else if let MalType::String(sym) = args.swap_remove(0) {
         Ok(MalType::Symbol(sym))
     } else {
-        Err(MalError::EvalError("'symbol' expects string".to_string()))
+        Err(EvalError("'symbol' expects string".to_string()))
     }
 }
 
 fn keyword(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'keyword'".to_string()))
+        Err(EvalError("too few args to 'keyword'".to_string()))
     } else {
         match args.swap_remove(0) {
             key @ MalType::Keyword(..) => Ok(key),
-            MalType::String(key) => Ok(MalType::Keyword(format!(":{key}\u{29E}"))),
-            _ => Err(MalError::EvalError("'keyword' expects string".to_string())),
+            MalType::String(key) => Ok(MalType::Keyword(format!(":{key}{KW_SUFFIX}"))),
+            _ => Err(EvalError("'keyword' expects string".to_string())),
         }
     }
 }
@@ -574,7 +522,7 @@ fn is_keyword(args: Vec<MalType>) -> MalResult {
     )))
 }
 
-fn vector(args: Vec<MalType>) -> MalResult {
+const fn vector(args: Vec<MalType>) -> MalResult {
     Ok(new_vector(args))
 }
 
@@ -594,7 +542,7 @@ fn is_sequential(args: Vec<MalType>) -> MalResult {
 
 fn hashmap(args: Vec<MalType>) -> MalResult {
     reader::read_map(args).map_err(|e| match e {
-        MalError::ParseError(msg) => MalError::EvalError(msg),
+        ParseError(msg) => EvalError(msg),
         _ => e,
     })
 }
@@ -608,7 +556,7 @@ fn is_map(args: Vec<MalType>) -> MalResult {
 
 fn assoc(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'assoc'".to_string()))
+        Err(EvalError("too few args to 'assoc'".to_string()))
     } else if let MalType::HashMap(mut orig_map, ..) = args.remove(0) {
         let MalType::HashMap(extra_map, ..) = hashmap(args)? else {
             unreachable!()
@@ -616,59 +564,38 @@ fn assoc(mut args: Vec<MalType>) -> MalResult {
         orig_map.extend(extra_map);
         Ok(new_hashmap(orig_map))
     } else {
-        Err(MalError::EvalError(
-            "'assoc' expects map (and args)".to_string(),
-        ))
+        Err(EvalError("'assoc' expects map (and args)".to_string()))
     }
 }
 
 fn dissoc(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'dissoc'".to_string()))
+        Err(EvalError("too few args to 'dissoc'".to_string()))
     } else if let MalType::HashMap(mut map, ..) = args.remove(0) {
         for elt in &args {
-            let key = match elt {
-                MalType::String(string) => string,
-                MalType::Keyword(keyword) => keyword,
-                _ => return Err(MalError::EvalError("hash-map key not hashable".to_string())),
-            };
-            map.remove(key);
+            map.remove(elt.to_key()?);
         }
         Ok(new_hashmap(map))
     } else {
-        Err(MalError::EvalError(
-            "'dissoc' expects map (and args)".to_string(),
-        ))
+        Err(EvalError("'dissoc' expects map (and args)".to_string()))
     }
 }
 
 fn get(mut args: Vec<MalType>) -> MalResult {
     if let [MalType::HashMap(map, ..), raw_key] = &mut args[..2] {
-        let key = match raw_key {
-            MalType::String(string) => string,
-            MalType::Keyword(keyword) => keyword,
-            _ => return Err(MalError::EvalError("hash-map key not hashable".to_string())),
-        };
-        Ok(map.remove(key).unwrap_or_default())
+        Ok(map.remove(raw_key.to_key()?).unwrap_or_default())
     } else if matches!(args.first(), Some(MalType::Nil)) {
         Ok(MalType::Nil)
     } else {
-        Err(MalError::EvalError("'get' expects map and key".to_string()))
+        Err(EvalError("'get' expects map and key".to_string()))
     }
 }
 
 fn contains(args: Vec<MalType>) -> MalResult {
     if let [MalType::HashMap(map, ..), raw_key] = &args[..2] {
-        let key = match raw_key {
-            MalType::String(string) => string,
-            MalType::Keyword(keyword) => keyword,
-            _ => return Err(MalError::EvalError("hash-map key not hashable".to_string())),
-        };
-        Ok(MalType::Bool(map.contains_key(key)))
+        Ok(MalType::Bool(map.contains_key(raw_key.to_key()?)))
     } else {
-        Err(MalError::EvalError(
-            "'contains?' expects map and key".to_string(),
-        ))
+        Err(EvalError("'contains?' expects map and key".to_string()))
     }
 }
 
@@ -677,7 +604,7 @@ fn keys(mut args: Vec<MalType>) -> MalResult {
         && let MalType::HashMap(map, ..) = args.swap_remove(0)
     {
         let keys = map.into_keys().map(|key| {
-            if key.ends_with('\u{29E}') {
+            if key.ends_with(KW_SUFFIX) {
                 MalType::Keyword(key)
             } else {
                 MalType::String(key)
@@ -685,7 +612,7 @@ fn keys(mut args: Vec<MalType>) -> MalResult {
         });
         Ok(new_list(keys.collect()))
     } else {
-        Err(MalError::EvalError("'keys' expects map".to_string()))
+        Err(EvalError("'keys' expects map".to_string()))
     }
 }
 
@@ -695,19 +622,17 @@ fn vals(mut args: Vec<MalType>) -> MalResult {
     {
         Ok(new_list(map.into_values().collect()))
     } else {
-        Err(MalError::EvalError("'vals' expects map".to_string()))
+        Err(EvalError("'vals' expects map".to_string()))
     }
 }
 
 fn readline(args: Vec<MalType>) -> MalResult {
     if let Some(MalType::String(msg)) = args.first() {
         print!("{msg}");
-    } else {
-        print!("user> ");
+        io::stdout().flush()?;
     }
 
     let mut input = String::new();
-    io::stdout().flush()?;
     io::stdin().read_line(&mut input)?;
 
     if input.is_empty() {
@@ -734,26 +659,33 @@ fn timems(_args: Vec<MalType>) -> MalResult {
 
 fn meta(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'meta'".to_string()))
+        Err(EvalError("too few args to 'meta'".to_string()))
     } else {
         match args.swap_remove(0) {
-            MalType::List(_, meta)
-            | MalType::Vector(_, meta)
-            | MalType::HashMap(_, meta)
-            | MalType::BuiltinFunc(_, meta)
-            | MalType::Lambda { meta, .. } => Ok(*meta),
-            _ => todo!(),
+            MalType::List(_, None)
+            | MalType::Vector(_, None)
+            | MalType::HashMap(_, None)
+            | MalType::BuiltinFunc(_, None)
+            | MalType::Lambda { meta: None, .. } => Ok(MalType::Nil),
+
+            MalType::List(_, Some(meta))
+            | MalType::Vector(_, Some(meta))
+            | MalType::HashMap(_, Some(meta))
+            | MalType::BuiltinFunc(_, Some(meta))
+            | MalType::Lambda {
+                meta: Some(meta), ..
+            } => Ok(*meta),
+
+            _ => Err(EvalError("'meta' not supported for given type".to_string())),
         }
     }
 }
 
 fn withmeta(mut args: Vec<MalType>) -> MalResult {
     if args.len() < 2 {
-        Err(MalError::EvalError(
-            "too few args to 'with-meta'".to_string(),
-        ))
+        Err(EvalError("too few args to 'with-meta'".to_string()))
     } else {
-        let meta = Box::new(args.swap_remove(1));
+        let meta = Some(Box::new(args.swap_remove(1)));
         match args.swap_remove(0) {
             MalType::List(list, ..) => Ok(MalType::List(list, meta)),
             MalType::Vector(vector, ..) => Ok(MalType::Vector(vector, meta)),
@@ -772,7 +704,9 @@ fn withmeta(mut args: Vec<MalType>) -> MalResult {
                 is_macro,
                 meta,
             }),
-            _ => todo!(),
+            _ => Err(EvalError(
+                "'with-meta' not supported for given type".to_string(),
+            )),
         }
     }
 }
@@ -806,12 +740,11 @@ fn is_number(args: Vec<MalType>) -> MalResult {
 
 fn seq(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'seq'".to_string()))
+        Err(EvalError("too few args to 'seq'".to_string()))
     } else {
         match args.swap_remove(0) {
             MalType::Nil => Ok(MalType::Nil),
-            MalType::List(list, ..) if list.is_empty() => Ok(MalType::Nil),
-            MalType::Vector(vector, ..) if vector.is_empty() => Ok(MalType::Nil),
+            MalType::List(seq, ..) | MalType::Vector(seq, ..) if seq.is_empty() => Ok(MalType::Nil),
             MalType::String(string) if string.is_empty() => Ok(MalType::Nil),
 
             list @ MalType::List(..) => Ok(list),
@@ -823,7 +756,7 @@ fn seq(mut args: Vec<MalType>) -> MalResult {
                     .collect(),
             )),
 
-            _ => Err(MalError::EvalError(
+            _ => Err(EvalError(
                 "'seq' expects list/vector/string/nil".to_string(),
             )),
         }
@@ -832,7 +765,7 @@ fn seq(mut args: Vec<MalType>) -> MalResult {
 
 fn conj(mut args: Vec<MalType>) -> MalResult {
     if args.is_empty() {
-        Err(MalError::EvalError("too few args to 'seq'".to_string()))
+        Err(EvalError("too few args to 'seq'".to_string()))
     } else {
         match args.remove(0) {
             MalType::Vector(mut vector, ..) => {
@@ -844,7 +777,7 @@ fn conj(mut args: Vec<MalType>) -> MalResult {
                 args.extend(list);
                 Ok(new_list(args))
             }
-            _ => Err(MalError::EvalError(
+            _ => Err(EvalError(
                 "'conj' expects list/vector and values".to_string(),
             )),
         }

@@ -1,45 +1,57 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Debug, io, rc::Rc};
+use std::collections::HashMap;
+use std::io;
+use std::{cell::RefCell, rc::Rc};
 
 use crate::env::Env;
 
+pub type MalResult = Result<MalType, MalError>;
+
 #[derive(Clone, Default)]
 pub enum MalType {
-    Number(i64),
-    Symbol(String),
-    List(Vec<Self>, Box<Self>),
     #[default]
     Nil,
     Bool(bool),
+    Number(i64),
+    Symbol(String),
     String(String),
     Keyword(String),
-    Vector(Vec<Self>, Box<Self>),
-    HashMap(HashMap<String, Self>, Box<Self>),
-    BuiltinFunc(Rc<dyn Fn(Vec<Self>) -> MalResult>, Box<Self>),
+    List(Vec<Self>, Option<Box<Self>>),
+    Vector(Vec<Self>, Option<Box<Self>>),
+    HashMap(HashMap<String, Self>, Option<Box<Self>>),
+    BuiltinFunc(Rc<dyn Fn(Vec<Self>) -> MalResult>, Option<Box<Self>>),
     Lambda {
         params: Vec<Self>,
         body: Box<Self>,
         capt_env: Env,
         is_macro: bool,
-        meta: Box<Self>,
+        meta: Option<Box<Self>>,
     },
     Atom(Rc<RefCell<Self>>),
 }
 
-pub fn new_list(list: Vec<MalType>) -> MalType {
-    MalType::List(list, Box::new(MalType::Nil))
+// helper functions for less typing
+pub const fn new_list(list: Vec<MalType>) -> MalType {
+    MalType::List(list, None)
 }
-
-pub fn new_vector(vector: Vec<MalType>) -> MalType {
-    MalType::Vector(vector, Box::new(MalType::Nil))
+pub const fn new_vector(vector: Vec<MalType>) -> MalType {
+    MalType::Vector(vector, None)
 }
-
-pub fn new_hashmap(hashmap: HashMap<String, MalType>) -> MalType {
-    MalType::HashMap(hashmap, Box::new(MalType::Nil))
+pub const fn new_hashmap(hashmap: HashMap<String, MalType>) -> MalType {
+    MalType::HashMap(hashmap, None)
 }
 
 impl MalType {
     pub const fn to_bool(&self) -> bool {
         !matches!(&self, Self::Nil | Self::Bool(false))
+    }
+
+    pub fn to_key(&self) -> Result<&str, MalError> {
+        match self {
+            Self::String(key) | Self::Keyword(key) => Ok(key),
+            _ => Err(MalError::ParseError(
+                "hash-map key not hashable".to_string(),
+            )),
+        }
     }
 
     pub fn is_list_with_sym(&self, sym: &str) -> bool {
@@ -50,22 +62,9 @@ impl MalType {
         }
     }
 
-    pub const fn is_vector(&self) -> bool {
-        matches!(self, Self::Vector(..))
-    }
-
     pub const fn set_macro(&mut self) {
         if let Self::Lambda { is_macro, .. } = self {
             *is_macro = true;
-        }
-    }
-
-    pub fn get_first(self) -> Option<Self> {
-        match self {
-            Self::Nil => Some(Self::Nil),
-            Self::List(list, ..) | Self::Vector(list, ..) if list.is_empty() => Some(Self::Nil),
-            Self::List(mut list, ..) | Self::Vector(mut list, ..) => Some(list.swap_remove(0)),
-            _ => None,
         }
     }
 }
@@ -73,6 +72,8 @@ impl MalType {
 impl PartialEq for MalType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Nil, Self::Nil) => true,
+            (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
             (Self::Number(l0), Self::Number(r0)) => l0 == r0,
             (Self::Symbol(l0), Self::Symbol(r0))
             | (Self::String(l0), Self::String(r0))
@@ -81,22 +82,14 @@ impl PartialEq for MalType {
                 Self::List(l0, ..) | Self::Vector(l0, ..),
                 Self::List(r0, ..) | Self::Vector(r0, ..),
             ) => l0 == r0,
-            (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
             (Self::HashMap(l0, ..), Self::HashMap(r0, ..)) => l0 == r0,
-            (Self::Nil, Self::Nil) => true,
             (Self::Atom(l0), Self::Atom(r0)) => Rc::ptr_eq(l0, r0),
+            // all functions are incomparable
             _ => false,
         }
     }
 }
 
-impl Debug for MalType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{mal}}")
-    }
-}
-
-#[derive(Debug)]
 pub enum MalError {
     EmptyInput,
     ParseError(String),
@@ -121,5 +114,3 @@ impl MalError {
         }
     }
 }
-
-pub type MalResult = Result<MalType, MalError>;
